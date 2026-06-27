@@ -16,7 +16,8 @@ var I = {
   bell:'M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6zM10 20a2 2 0 004 0',
   file:'M6 3h8l4 4v14H6zM14 3v4h4', shield:'M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z',
   receipt:'M5 3h14v18l-2-1-2 1-2-1-2 1-2-1-2 1zM8 8h8M8 12h8', image:'M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4',
-  qr:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM15 15h2v2h-2z', cube:'M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9'
+  qr:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM15 15h2v2h-2z', cube:'M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9',
+  pen:'M4 20l4-1 11-11-3-3L5 16zM14 5l3 3'
 };
 function svg(n,s,w){s=s||22;w=w||1.7;return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="'+w+'" stroke-linecap="round" stroke-linejoin="round">'+(I[n].split('M').filter(Boolean).map(function(d){return '<path d="M'+d+'"/>'}).join(''))+'</svg>'}
 
@@ -87,9 +88,9 @@ function vArmario(m){
   Array.prototype.forEach.call(m.querySelectorAll('[data-mode]'),function(b){b.onclick=function(){if(mode!==b.dataset.mode){unmountWardrobe3D();mode=b.dataset.mode;vArmario(m);}}});
   var ward=m.querySelector('#ward');
   if(mode==='3d'){
-    ward.innerHTML='<div class="stage3d" id="stage"><div class="hint">Arrastra para girar \u00b7 toca una prenda para acercarte</div></div>';
+    ward.innerHTML='<div class="stage3d" id="stage"><div class="hint">Desliza para pasar prendas \u00b7 toca el centro para abrir</div></div><div class="wardcap" id="wardcap"></div>';
     var stage=ward.querySelector('#stage');
-    try{ mountWardrobe3D(stage, store.garments, {onSelect:function(it){openFicha(it.id)}}); }
+    try{ mountWardrobe3D(stage, store.garments, {onSelect:function(it){openFicha(it.id)},onFocus:function(it){var c=document.getElementById('wardcap');if(c)c.innerHTML='<div class="wc-b">'+it.brand+'</div><div class="wc-n">'+it.name+'</div>'}}); }
     catch(e){ ward.innerHTML='<div class="empty" style="padding-top:120px">Tu dispositivo no soporta 3D.<br>Usa la vista en cuadr\u00edcula.</div>'; }
   } else {
     var cats=['Todo','En venta'].concat(store.garments.reduce(function(a,g){if(a.indexOf(g.cat)<0)a.push(g.cat);return a},[]));
@@ -154,6 +155,34 @@ function renderFicha(){
   });
 }
 function spec(l,v,eco){return '<div class="spec"><div class="l">'+l+'</div><div class="v'+(eco?' eco':'')+'">'+v+'</div></div>'}
+
+/* ---------------- formulario de prenda (reutilizable) ---------------- */
+var CATS=['Camisetas','Camisas','Polos','Sudaderas','Jers\u00e9is','Chaquetas','Abrigos','Parkas','Plumas / Acolchados','Pantalones','Vaqueros','Shorts','Faldas','Vestidos','Calzado','Accesorios'];
+var FITS=['Slim Fit','Regular Fit','Oversized','Boxy','Cargo','Wide Leg','Straight','Bomber','Overshirt','Oxford','Puffer','Otro'];
+var SEASONS=['Primavera/Verano','Oto\u00f1o/Invierno','Todo el a\u00f1o'];
+var FORMS=['Casual','Smart casual','Formal','Deporte'];
+var CONDS=['Nuevo con etiqueta','Como nuevo','Buen estado','Usado'];
+function optSel(opts,val){var has=opts.indexOf(val)>=0;return (val&&!has?'<option selected>'+val+'</option>':'')+opts.map(function(o){return '<option'+(o===val?' selected':'')+'>'+o+'</option>'}).join('')}
+function esc(s){return (s==null?'':(''+s)).replace(/"/g,'&quot;')}
+function ministars(c){return c==null?'':'<span class="cstars">'+stars(c)+'</span>'}
+function garmentFormHTML(p,conf){p=p||{};conf=conf||{};
+  return '<div class="field"><label>Marca'+ministars(conf.brand)+'</label><input id="f_brand" value="'+esc(p.brand)+'" placeholder="Ecoalf"/></div>'+
+   '<div class="field"><label>Nombre / modelo'+ministars(conf.name)+'</label><input id="f_name" value="'+esc(p.name)+'" placeholder="Parka con capucha"/></div>'+
+   '<div class="row2"><div class="field"><label>Categor\u00eda'+ministars(conf.category)+'</label><select id="f_cat">'+optSel(CATS,p.cat||p.category)+'</select></div>'+
+   '<div class="field"><label>Corte'+ministars(conf.fit)+'</label><select id="f_fit">'+optSel(FITS,p.fit)+'</select></div></div>'+
+   '<div class="row2"><div class="field"><label>Color</label><input id="f_color" value="'+esc((p.colors&&p.colors[0])||p.color)+'" placeholder="Verde"/></div>'+
+   '<div class="field"><label>Material'+ministars(conf.material)+'</label><input id="f_mat" value="'+esc(p.material)+'" placeholder="Poli\u00e9ster reciclado"/></div></div>'+
+   '<div class="row2"><div class="field"><label>Talla</label><input id="f_size" value="'+esc(p.size)+'" placeholder="M"/></div>'+
+   '<div class="field"><label>Precio \u20ac</label><input id="f_price" inputmode="decimal" value="'+esc(p.price)+'" placeholder="0"/></div></div>'+
+   '<div class="row2"><div class="field"><label>Temporada</label><select id="f_season">'+optSel(SEASONS,p.season)+'</select></div>'+
+   '<div class="field"><label>Formalidad</label><select id="f_form">'+optSel(FORMS,p.formality)+'</select></div></div>'+
+   '<div class="row2"><div class="field"><label>Estado</label><select id="f_cond">'+optSel(CONDS,p.cond)+'</select></div>'+
+   '<div class="field"><label>Tienda</label><input id="f_store" value="'+esc(p.store)+'" placeholder="Ecoalf.com"/></div></div>';
+}
+function readForm(scope){var q=function(id){var e=scope.querySelector('#'+id);return e?e.value.trim():''};
+  var color=q('f_color');
+  return {brand:q('f_brand'),name:q('f_name')||'Prenda',cat:q('f_cat'),fit:q('f_fit'),color:color,colors:[color],material:q('f_mat'),size:q('f_size'),price:parseFloat(q('f_price'))||0,season:q('f_season'),formality:q('f_form'),cond:q('f_cond'),store:q('f_store')};
+}
 
 /* ---------------- AÑADIR (visión) ---------------- */
 var addMode='choose';
@@ -278,4 +307,4 @@ function initCloud(){if(!cloud.cloudEnabled())return;cloud.getSession().then(fun
 function syncFromCloud(){if(!session)return Promise.resolve();return cloud.pullGarments().then(function(rows){
   if(rows&&rows.length===0&&store.garments.length){return Promise.all(store.garments.map(function(g){return cloud.pushGarment(g,true)})).then(function(){return cloud.pullGarments()})}
   return rows;
-}).then(function(rows){if(rows){store.garments=rows.map(function(r){var g=cloud.fromRow(r);g.cat=g.category||g.cat||'Camisetas';g.fit=g.fit||'Regular Fit';g.colors=g.colors||[g.color];g.docs=g.docs||[];g.photos=g.photos||[];return g});save()}})}
+}).then(function(rows){if(rows){store.garments=rows.map(function(r){var g=cloud.fromRow(r);g.cat=g.category||g.cat||'Camisetas';g.fit=g.fit||'Regular Fit';g.colors=g.colors||[g.color];g.docs=g.docs||[];g.photos=g.photos||[];return g});save()}})}|[g.color];g.docs=g.docs||[];g.photos=g.photos||[];return g});save()}})}
