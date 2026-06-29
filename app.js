@@ -526,32 +526,47 @@ function maletaStep1(el){
 
 function buildCalendar(el){
   const cal=el.querySelector('#cal'); if(!cal)return;
-  const now=new Date(); const year=now.getFullYear(); const month=now.getMonth();
-  const first=new Date(year,month,1).getDay()||7;
+  const today=new Date(); const todayKey=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  if(trip.calY==null){trip.calY=today.getFullYear();trip.calM=today.getMonth();}
+  const year=trip.calY, month=trip.calM;
+  const first=new Date(year,month,1).getDay()||7;       // 1=Lun … 7=Dom
   const days=new Date(year,month+1,0).getDate();
   const months=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-  cal.innerHTML=`<div class="cal-head">${months[month]} ${year}</div>
+  // no permitir navegar a meses ya pasados
+  const atCurrentMonth = year===today.getFullYear() && month===today.getMonth();
+  cal.innerHTML=`
+    <div class="cal-head">
+      <button class="cal-nav" id="cal_prev" ${atCurrentMonth?'disabled':''}>${svg('back',18)}</button>
+      <span>${months[month]} ${year}</span>
+      <button class="cal-nav" id="cal_next">${svg('chev',18)}</button>
+    </div>
     <div class="cal-grid">
       ${['L','M','X','J','V','S','D'].map(d=>`<div class="cal-day-name">${d}</div>`).join('')}
       ${Array(first-1).fill('<div></div>').join('')}
-      ${Array.from({length:days},(_,i)=>{const d=i+1,full=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const isFrom=trip.dateFrom===full,isTo=trip.dateTo===full;
+      ${Array.from({length:days},(_,i)=>{
+        const d=i+1, full=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const isFrom=trip.dateFrom===full, isTo=trip.dateTo===full;
         const inRange=trip.dateFrom&&trip.dateTo&&full>trip.dateFrom&&full<trip.dateTo;
-        const past=new Date(year,month,d)<now;
-        return `<button class="cal-day${isFrom?' from':''}${isTo?' to':''}${inRange?' in':''}" data-date="${full}" ${past?'disabled':''}>${d}</button>`;}).join('')}
+        const past=full<todayKey;   // comparación por día (string YYYY-MM-DD), no por hora
+        return `<button class="cal-day${isFrom?' from':''}${isTo?' to':''}${inRange?' in':''}" data-date="${full}" ${past?'disabled':''}>${d}</button>`;
+      }).join('')}
     </div>`;
+  const prev=cal.querySelector('#cal_prev'), next=cal.querySelector('#cal_next');
+  if(prev)prev.onclick=()=>{ if(month===0){trip.calY--;trip.calM=11;}else trip.calM--; buildCalendar(el); };
+  if(next)next.onclick=()=>{ if(month===11){trip.calY++;trip.calM=0;}else trip.calM++; buildCalendar(el); };
   cal.querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>{
     const d=b.dataset.date;
-    if(!trip.dateFrom||trip.dateTo){trip.dateFrom=d;trip.dateTo=null;}
-    else if(d>trip.dateFrom){trip.dateTo=d;}
-    else{trip.dateFrom=d;trip.dateTo=null;}
+    if(!trip.dateFrom||trip.dateTo){ trip.dateFrom=d; trip.dateTo=null; }   // empezar selección
+    else if(d>trip.dateFrom){ trip.dateTo=d; }                              // cerrar rango
+    else if(d<trip.dateFrom){ trip.dateFrom=d; }                            // mover inicio antes
+    else { trip.dateTo=d; }                                                 // mismo día = viaje de 1 día
     if(trip.dateFrom&&trip.dateTo){
       const ms=new Date(trip.dateTo)-new Date(trip.dateFrom);
-      trip.days=Math.max(1,Math.round(ms/86400000))+1;
-    }
-    const tf=el.querySelector('#t_from'),tt=el.querySelector('#t_to');
-    if(tf)tf.textContent=trip.dateFrom?trip.dateFrom.slice(5):'—';
-    if(tt)tt.textContent=trip.dateTo?trip.dateTo.slice(5):'—';
+      trip.days=Math.max(1,Math.round(ms/86400000)+1);
+    } else { trip.days=1; }
+    const tf=el.querySelector('#t_from'), tt=el.querySelector('#t_to');
+    if(tf)tf.textContent=trip.dateFrom||'—';
+    if(tt)tt.textContent=trip.dateTo||'—';
     buildCalendar(el);
   });
 }
@@ -681,16 +696,21 @@ function buildMaletaPlan(){
   const days=trip.days, tAvg=trip.tAvg??18, rainDays=trip.rainDays??0;
   const cold=tAvg<14||rainDays>2;
   const pool=store.garments.filter(g=>g.status!=='venta');
-  const isTop=g=>/camiseta|polo|top|camisa/i.test(g.cat);
-  const isLayer=g=>/jersey|sudadera|hoodie|blazer|bomber|chaqueta|abrigo|parka|gabardina|plum|cort/i.test(g.cat);
-  const isBottom=g=>/pantalón|vaquero|chino|cargo|jogger|wide|straight|slim|short|bermuda|falda/i.test(g.cat);
-  const isShoe=g=>/sneak|bamba|running|bota|botín|sandal|chanc|tacón|oxford|mocasín|zapatill/i.test(g.cat);
-  const score=g=>{ let s=g.worn||0; if(NEUTRAL_COLORS.includes(g.color))s+=8; const seasonOk=g.season==='Todo el año'||(cold?g.season==='Otoño/Invierno':g.season==='Primavera/Verano'); if(seasonOk)s+=10; if(trip.acts.includes('Deporte')&&g.formality==='Deporte')s+=6; if(trip.plan==='Boda'&&g.formality==='Formal')s+=12; return s; };
+  const grp=g=>g.catGroup||catToGroup(g.cat||'');
+  const isTop=g=>['Camisetas','Polos','Camisas'].includes(grp(g));
+  const isLayer=g=>['Jerséis/Sudaderas','Chaquetas/Abrigos'].includes(grp(g));
+  const isBottom=g=>['Pantalones','Shorts/Bermudas','Faldas/Vestidos'].includes(grp(g));
+  const isShoe=g=>grp(g)==='Calzado';
+  const score=g=>{ let s=(g.worn||0)*0.5; if(NEUTRAL_COLORS.includes(g.color))s+=8; const seasonOk=g.season==='Todo el año'||(cold?g.season==='Otoño/Invierno':g.season==='Primavera/Verano'); if(seasonOk)s+=10; else s-=4; if(trip.acts.includes('Deporte')&&g.formality==='Deporte')s+=6; if(trip.plan==='Boda'&&g.formality==='Formal')s+=12; return s; };
   const take=(arr,n)=>arr.slice().sort((a,b)=>score(b)-score(a)).slice(0,Math.max(0,n));
   const nTops=Math.max(2,Math.ceil(days*0.9)), nBottoms=Math.max(1,Math.ceil(days/3)+1), nLayers=cold?2:1, nShoes=days>5?2:1;
   const tops=take(pool.filter(isTop),nTops), layers=take(pool.filter(isLayer),nLayers), bottoms=take(pool.filter(isBottom),nBottoms), shoes=take(pool.filter(isShoe),nShoes);
   const seen={}, sel=[];
   [...tops,...layers,...bottoms,...shoes].forEach(g=>{ if(!seen[g.id]){seen[g.id]=1;sel.push(g);} });
+  // Red de seguridad: si por filtros raros quedara vacío pero hay prendas usables, mete las mejores.
+  if(!sel.length && pool.length){
+    take(pool,Math.min(pool.length,Math.max(3,Math.ceil(days*0.9)))).forEach(g=>sel.push(g));
+  }
   return {sel,tops,layers,bottoms,shoes};
 }
 
@@ -706,14 +726,16 @@ function pickOutfit(){
   return [top,s].filter(Boolean);
 }
 function vEstilista(m){
-  const intents=[['hoy','¿Qué me pongo hoy?'],['viaje','Preparar viaje'],['muerta','¿Qué no uso?'],['vender','¿Qué vendo?'],['combina','¿Qué combina?']];
+  const intents=[['hoy','¿Qué me pongo hoy?'],['viaje','Preparar viaje'],['comprar','¿Me lo compro?'],['hueco','¿Qué me falta?'],['muerta','¿Qué no uso?'],['vender','¿Qué vendo?'],['combina','¿Qué combina?']];
   m.innerHTML=`<div class="reveal"><div class="eyebrow">Estilista</div>
     <div class="title">Tu asesor<br>de imagen</div>
-    <div class="sub">Decisiones sobre la ropa que ya tienes. Nunca sobre la que no.</div></div>
+    <div class="sub">Decisiones sobre tu ropa y sobre lo que de verdad te conviene comprar.</div></div>
     <div class="intent reveal" style="animation-delay:.05s">${intents.map(x=>`<button data-i="${x[0]}">${x[1]}</button>`).join('')}</div>
     <div id="adv">${advisorCard(stylistMsg||defaultAdvice())}</div>`;
   m.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{
     if(b.dataset.i==='viaje'){openMaleta();return;}
+    if(b.dataset.i==='comprar'){openAsesorCompra();return;}
+    if(b.dataset.i==='hueco'){openHuecos();return;}
     const a=document.getElementById('adv'); a.style.opacity='0';
     setTimeout(()=>{stylistMsg=advice(b.dataset.i);a.innerHTML=advisorCard(stylistMsg);a.style.transition='opacity .4s var(--ease)';a.style.opacity='1';bindOutfit(a);},170);
   });
@@ -729,6 +751,112 @@ function advice(k){
   return defaultAdvice();
 }
 const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Estilista Drobe<span>Solo con tu armario</span></div></div><div class="say">${a.say}</div><div class="outfit">${a.items.map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img src="${g.img||''}"/></div><div class="l">${g.brand}</div></div>`).join('')}</div></div>`;
+
+/* ═══════════════════════════════════════════
+   ASESOR DE COMPRA  (¿me lo compro?)
+═══════════════════════════════════════════ */
+function wardrobeSummary(){
+  return store.garments.filter(g=>g.status!=='venta').map(g=>`${g.cat} ${g.color} (${g.brand})`).join(', ');
+}
+async function searchOffers(query){
+  try{
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query})});
+    const d=await r.json();
+    return d&&d.available?d.results||[]:null; // null = no hay key configurada
+  }catch(e){ return null; }
+}
+function openAsesorCompra(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='asesor';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="ab">${svg('back',20)}</button><span class="t">¿Me lo compro?</span></div>
+    <div class="sub" style="margin:-6px 0 16px">Describe la prenda que estás mirando (o pega el enlace). La IA la juzga contra tu armario — y te dice si <b>no</b> merece la pena.</div>
+    <div class="field"><label>¿Qué estás mirando?</label><input id="ac_q" placeholder="Parka verde Ecoalf, vaquero recto azul oscuro…"/></div>
+    <div class="field"><label>Precio (opcional)</label><input id="ac_p" inputmode="decimal" placeholder="120"/></div>
+    <button class="btn dark" id="ac_go">${svg('spark',18)} Analizar</button>
+    <div id="ac_out" style="margin-top:16px"></div></div>`;
+  document.body.appendChild(el);
+  el.querySelector('#ab').onclick=()=>el.remove();
+  el.querySelector('#ac_go').onclick=async function(){
+    const q=el.querySelector('#ac_q').value.trim(); if(!q)return;
+    const price=parseFloat(el.querySelector('#ac_p').value)||null;
+    const out=el.querySelector('#ac_out');
+    this.disabled=true; this.innerHTML=`${svg('load',18)} Analizando…`; this.querySelector('svg').classList.add('spin');
+    // 1) Análisis honesto contra el armario (IA, gratis)
+    const sys=`Eres un asesor de compra honesto. Analizas si al usuario le conviene comprar una prenda, basándote SOLO en su armario actual.
+Devuelve SOLO JSON: {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases","ya_tienes":"qué prenda parecida ya tiene o '' si nada","looks_nuevos":número estimado}.
+Sé honesto: si ya tiene algo parecido o no encaja con su estilo, dilo y recomienda no comprar.`;
+    const usr=`Armario del usuario: ${wardrobeSummary()}.\nEstá pensando en comprar: "${q}"${price?` por ${price}€`:''}.`;
+    const r=await callAI(sys,usr);
+    // 2) Ofertas reales (si hay key de shopping)
+    const offers=await searchOffers(q);
+
+    let html='';
+    if(r){
+      const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
+      const vt={comprar:'Te conviene',dudoso:'Piénsalo',evitar:'No lo compres'}[r.veredicto]||'';
+      html+=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Veredicto<span>Solo con tu armario</span></div>
+        <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc}">${vt} · ${r.encaje||0}%</span></div>
+        <div class="say">${r.razon||''}</div>
+        ${r.ya_tienes?`<div class="sub" style="margin-top:8px">Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}
+        ${r.looks_nuevos?`<div class="sub" style="margin-top:4px">Crearía ~${r.looks_nuevos} looks nuevos.</div>`:''}</div>`;
+    } else {
+      html+=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa ANTHROPIC_API_KEY). Aun así puedo buscar ofertas si están activadas.</span></div>`;
+    }
+    // ofertas
+    if(offers===null){
+      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Búsqueda de ofertas no activada. Añade <b>SERPAPI_KEY</b> en Vercel (100 búsquedas/mes gratis) y aquí aparecerán precios reales de tiendas.</span></div>`;
+    } else if(offers.length){
+      html+=`<div class="shead"><h2>Mejores ofertas</h2></div>`+offers.map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
+        <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:''}</div>
+        <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
+        <div class="offer-p">${o.price||''}</div></a>`).join('');
+    } else {
+      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>No encontré ofertas para esa búsqueda. Prueba con marca + tipo de prenda.</span></div>`;
+    }
+    out.innerHTML=html;
+    this.disabled=false; this.innerHTML=`${svg('spark',18)} Analizar otra`;
+  };
+}
+
+/* ═══════════════════════════════════════════
+   ¿QUÉ ME FALTA?  (análisis de huecos + tipo de prenda)
+═══════════════════════════════════════════ */
+function openHuecos(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='huecos';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="hb">${svg('back',20)}</button><span class="t">¿Qué me falta?</span></div>
+    <div class="sub" style="margin:-6px 0 16px">La IA analiza tu armario y tu estilo para decirte qué <b>tipo de prenda</b> te cundiría más — no qué tienda.</div>
+    <div id="h_out"><div class="empty">${svg('load',26)}<div style="margin-top:10px">Analizando tu armario…</div></div></div></div>`;
+  document.body.appendChild(el);
+  el.querySelector('.empty svg')?.classList.add('spin');
+  el.querySelector('#hb').onclick=()=>el.remove();
+  // resumen rápido local
+  const groups={}; store.garments.forEach(g=>{const k=g.catGroup||catToGroup(g.cat||'');groups[k]=(groups[k]||0)+1;});
+  const sys=`Eres un asesor de armario. Analizas qué le falta al usuario para tener un armario versátil, basándote en lo que YA tiene.
+Recomienda TIPOS de prenda (no marcas ni tiendas). Devuelve SOLO JSON:
+{"resumen":"1 frase sobre el estado de su armario","faltas":[{"prenda":"tipo concreto, ej: vaquero recto azul oscuro","motivo":"por qué le cundiría","busqueda":"términos para buscar en tiendas"}]}.
+Máximo 4 faltas, las más útiles.`;
+  const usr=`Armario actual por categorías: ${JSON.stringify(groups)}. Prendas: ${wardrobeSummary()}.`;
+  callAI(sys,usr).then(async r=>{
+    const out=el.querySelector('#h_out');
+    if(!r||!r.faltas){ out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa ANTHROPIC_API_KEY). Pero a ojo: te faltan pantalones y calzado para completar looks.</span></div>`; return; }
+    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Tu armario<span>Análisis de huecos</span></div></div><div class="say">${r.resumen||''}</div></div>`+
+      `<div class="shead"><h2>Lo que te cundiría</h2></div>`+
+      r.faltas.map((f,i)=>`<div class="gap" data-q="${esc(f.busqueda||f.prenda)}">
+        <div class="gap-main"><div class="gap-t">${f.prenda}</div><div class="gap-m">${f.motivo}</div></div>
+        <button class="gap-btn">${svg('tag',16)} Buscar</button></div>`).join('')+
+      `<div class="note" style="margin-top:12px">${svg('spark',18)}<span>Recomiendo <b>tipos de prenda</b> por tu estilo, nunca tiendas. Toca "Buscar" para ver ofertas reales (si SERPAPI_KEY está activa).</span></div>`;
+    out.querySelectorAll('.gap').forEach(g=>g.querySelector('.gap-btn').onclick=async function(){
+      const q=g.dataset.q; this.disabled=true; this.innerHTML=`${svg('load',16)} …`; this.querySelector('svg').classList.add('spin');
+      const offers=await searchOffers(q);
+      let box=g.querySelector('.gap-offers'); if(!box){box=document.createElement('div');box.className='gap-offers';g.after(box);}
+      if(offers===null) box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY en Vercel para ver ofertas reales.</span></div>`;
+      else if(offers.length) box.innerHTML=offers.slice(0,3).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:''}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+      else box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Sin resultados.</span></div>`;
+      this.disabled=false; this.innerHTML=`${svg('tag',16)} Buscar`;
+    });
+  });
+}
 
 /* ═══════════════════════════════════════════
    INSIGHTS
