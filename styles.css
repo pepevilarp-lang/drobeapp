@@ -175,3 +175,12 @@ main{flex:1;padding:0 22px 120px}
 .spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .field{margin-bottom:12px}.field label{display:block;font-size:11px;font-weight:600;color:var(--ink3);margin-bottom:5px}
 .field input,.field select{width:100%;padding:12px 13px;border-radius:11px;border:1px solid var(--hair);background:#fff;font-size:14px}
+
+/* cover-flow caption + edit + scan preview */
+.wardcap{text-align:center;margin-top:14px;min-height:42px}
+.wardcap .wc-b{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.wardcap .wc-n{font-size:18px;font-weight:700;letter-spacing:-.02em;margin-top:2px}
+.cstars{margin-left:6px}.cstars .stars{font-size:9px}
+.ficha-edit{position:absolute;top:calc(env(safe-area-inset-top) + 12px);right:16px;width:38px;height:38px;border-radius:999px;background:rgba(255,255,255,.85);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;box-shadow:var(--s1);z-index:2;color:var(--ink)}
+.scanimg{width:120px;height:150px;border-radius:14px;overflow:hidden;background:var(--surface-2);box-shadow:var(--s1);margin:0 auto 16px}
+.scanimg img{width:100%;height:100%;object-fit:cover;object-position:center top}
