@@ -41,20 +41,23 @@ module.exports = async function handler(req, res) {
   try {
     // 1) Búsqueda de la MISMA marca/producto exacto
     const exactQuery = query || ((brand ? brand + ' ' : '') + productType);
-    const exactRaw = await serpSearch(exactQuery);
+    let exactRaw = await serpSearch(exactQuery);
     let exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
+    // Fallback: si con marca no hay nada, buscar solo por tipo de producto
+    if (!exact.length && productType && exactQuery !== productType) {
+      exactRaw = await serpSearch(productType);
+      exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
+    }
     exact.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
 
-    // 2) Búsqueda de ALTERNATIVAS similares (sin marca, por tipo de prenda)
-    //    para encontrar prendas parecidas más baratas de otras marcas
+    // 2) Búsqueda de ALTERNATIVAS similares (por tipo, otras marcas, más baratas)
     let alternatives = [];
-    if (productType) {
-      const altRaw = await serpSearch(productType);
+    const altQuery = productType || query;
+    if (altQuery) {
+      const altRaw = await serpSearch(altQuery);
       alternatives = altRaw.map(mapItem)
         .filter(p => p.title && p.price_value)
-        // excluir la misma marca (ya está en exact)
         .filter(p => !brand || !((p.title || '').toLowerCase().includes(brand.toLowerCase())))
-        // solo más baratas si tenemos precio de referencia
         .filter(p => !maxPrice || p.price_value < maxPrice);
       alternatives.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
     }
@@ -63,7 +66,6 @@ module.exports = async function handler(req, res) {
       available: true,
       exact: exact.slice(0, 6),
       alternatives: alternatives.slice(0, 6),
-      // compatibilidad con versión anterior
       results: exact.slice(0, 6)
     });
   } catch(e) {
