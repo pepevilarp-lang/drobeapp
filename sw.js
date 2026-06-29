@@ -1,4 +1,4 @@
-const CACHE = 'drobe-v8';
+const CACHE = 'drobe-v10';
 const SHELL = [
   './',
   './index.html',
