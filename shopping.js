@@ -39,34 +39,53 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // 1) Búsqueda de la MISMA marca/producto exacto
+    // Construir queries progresivamente más simples
     const exactQuery = query || ((brand ? brand + ' ' : '') + productType);
+    // Para marcas pequeñas, simplificar: quitar colores/adjetivos extra
+    const simpleQuery = brand && productType ? brand + ' ' + productType : exactQuery;
+    const altQuery = productType || query;
+
+    // Búsqueda 1: query exacta
     let exactRaw = await serpSearch(exactQuery);
     let exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
-    // Fallback: si con marca no hay nada, buscar solo por tipo de producto
-    if (!exact.length && productType && exactQuery !== productType) {
-      exactRaw = await serpSearch(productType);
+
+    // Fallback 1: query simplificada (marca + tipo)
+    if (!exact.length && simpleQuery !== exactQuery) {
+      exactRaw = await serpSearch(simpleQuery);
+      exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
+    }
+    // Fallback 2: solo el tipo de prenda con marca
+    if (!exact.length && brand && altQuery) {
+      exactRaw = await serpSearch(brand + ' ' + altQuery.split(' ').slice(0,2).join(' '));
       exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
     }
     exact.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
 
-    // 2) Búsqueda de ALTERNATIVAS similares (por tipo, otras marcas, más baratas)
+    // Búsqueda 2: alternativas similares de otras marcas — SIEMPRE se ejecuta
     let alternatives = [];
-    const altQuery = productType || query;
     if (altQuery) {
-      const altRaw = await serpSearch(altQuery);
+      // Buscar versión genérica del producto (sin marca)
+      const genericQuery = altQuery.replace(new RegExp(brand || '', 'gi'), '').trim() || altQuery;
+      const altRaw = await serpSearch(genericQuery);
       alternatives = altRaw.map(mapItem)
         .filter(p => p.title && p.price_value)
-        .filter(p => !brand || !((p.title || '').toLowerCase().includes(brand.toLowerCase())))
-        .filter(p => !maxPrice || p.price_value < maxPrice);
+        .filter(p => !brand || !((p.title||'').toLowerCase().includes((brand||'').toLowerCase())))
+        .filter(p => !maxPrice || p.price_value < maxPrice * 0.95); // al menos 5% más barato
       alternatives.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
+      // Si no hay alternativas más baratas, mostrar las más baratas sin filtro de precio
+      if (!alternatives.length) {
+        alternatives = altRaw.map(mapItem)
+          .filter(p => p.title && p.price_value)
+          .filter(p => !brand || !((p.title||'').toLowerCase().includes((brand||'').toLowerCase())));
+        alternatives.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
+      }
     }
 
     res.status(200).json({
       available: true,
-      exact: exact.slice(0, 6),
-      alternatives: alternatives.slice(0, 6),
-      results: exact.slice(0, 6)
+      exact: exact.slice(0, 5),
+      alternatives: alternatives.slice(0, 5),
+      results: exact.slice(0, 5)
     });
   } catch(e) {
     res.status(200).json({ available: false, reason: e.message });
