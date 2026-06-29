@@ -721,8 +721,10 @@ function openScannerTienda(){
     const similar=store.garments.filter(g=>g.status!=='venta'&&(q.toLowerCase().includes((g.cat||'').toLowerCase().split(' ')[0])||(brand&&(g.brand||'').toLowerCase()===brand.toLowerCase())));
     const dupAlert=similar.length?`Ya tienes: ${similar.map(g=>g.brand+' '+g.name).join(', ')}.`:'';
 
-    // tipo de prenda sin marca, para buscar alternativas similares
-    const productType=q.replace(new RegExp(brand,'ig'),'').trim()||q;
+    // tipo de prenda sin marca para buscar alternativas
+    const productType=brand
+      ? q.replace(new RegExp('\\b'+brand+'\\b','gi'),'').replace(/\s+/g,' ').trim()||q
+      : q;
 
     const sys=`Eres el asesor de compra de Drobe. El usuario está en una tienda. Sé directo. Devuelve SOLO JSON:
 {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases directas","precio_ok":true,"precio_comentario":"","looks_nuevos":0}`;
@@ -750,32 +752,32 @@ Estilo: ${dna.topFit||''}, presupuesto medio ${dna.avgPrice||0}€.`;
         ${price&&r.precio_comentario?`<div class="sub" style="margin-top:6px">${r.precio_comentario}</div>`:''}</div>`;
     }
 
-    if(offers===null){
-      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Activa <b>SERPAPI_KEY</b> en Vercel para ver precios reales de tiendas.</span></div>`;
-    } else {
-      // MISMA MARCA — el mejor precio del mismo producto
-      if(offers.exact&&offers.exact.length){
-        const cheapest=offers.exact[0];
-        const saving=price&&cheapest.price_value?Math.round(price-cheapest.price_value):null;
-        html+=`<div class="shead"><h2>${brand||'Misma prenda'} · mejor precio</h2></div>`;
-        if(saving&&saving>0)html+=`<div class="save-banner">${svg('tag',18)} La encuentras <b>${saving}€ más barata</b> que en ${storeName||'la tienda'}</div>`;
-        html+=offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener">
-          <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
-          <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div>
-          <div class="offer-p">${o.price||''}</div></a>`).join('');
-      }
-      // ALTERNATIVAS más baratas y parecidas de otras marcas
-      if(offers.alternatives&&offers.alternatives.length){
-        html+=`<div class="shead"><h2>Alternativas parecidas más baratas</h2></div>
-          <div class="sub" style="margin:-4px 0 10px">Otras marcas con prendas similares a mejor precio.</div>`;
-        html+=offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
-          <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
-          <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
-          <div class="offer-p">${o.price||''}</div></a>`).join('');
-      }
-      if((!offers.exact||!offers.exact.length)&&(!offers.alternatives||!offers.alternatives.length)){
-        html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>No encontré ofertas. Prueba con marca + tipo de prenda.</span></div>`;
-      }
+    // Construir bloques de ofertas. Si SerpApi no da resultados, la IA genera alternativas.
+    const gSearch=t=>`https://www.google.com/search?tbm=shop&q=${encodeURIComponent(t)}`;
+    let hasRealOffers=false;
+    if(offers&&offers.exact&&offers.exact.length){
+      hasRealOffers=true;
+      const cheapest=offers.exact[0];
+      const saving=price&&cheapest.price_value?Math.round(price-cheapest.price_value):null;
+      html+=`<div class="shead"><h2>${brand||'Misma prenda'} · mejor precio</h2></div>`;
+      if(saving&&saving>0)html+=`<div class="save-banner">${svg('tag',18)} La encuentras <b>${saving}€ más barata</b> que en ${storeName||'la tienda'}</div>`;
+      html+=offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener">
+        <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+        <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div>
+        <div class="offer-p">${o.price||''}</div></a>`).join('');
+    }
+    if(offers&&offers.alternatives&&offers.alternatives.length){
+      hasRealOffers=true;
+      html+=`<div class="shead"><h2>Alternativas parecidas más baratas</h2></div>
+        <div class="sub" style="margin:-4px 0 10px">Otras marcas con prendas similares a mejor precio.</div>`;
+      html+=offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
+        <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+        <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
+        <div class="offer-p">${o.price||''}</div></a>`).join('');
+    }
+    // SIEMPRE: si no hubo ofertas reales, la IA propone alternativas concretas
+    if(!hasRealOffers){
+      html+=`<div id="ai_alts"><div class="empty" style="padding:14px 0">${svg('load',22)}<div style="margin-top:8px;font-size:13px">Buscando alternativas…</div></div></div>`;
     }
 
     html+=`<div style="display:flex;gap:10px;margin-top:16px">
@@ -783,6 +785,31 @@ Estilo: ${dna.topFit||''}, presupuesto medio ${dna.avgPrice||0}€.`;
       <button class="btn ghost" id="sc_no" style="flex:1">Lo dejo</button>
     </div>`;
     out.innerHTML=html;
+    // Si no hubo ofertas reales, pedir a la IA alternativas concretas
+    if(!hasRealOffers){
+      const altBox=out.querySelector('#ai_alts');
+      const gSearch2=t=>`https://www.google.com/search?tbm=shop&q=${encodeURIComponent(t)}`;
+      const altSys=`Eres un experto en moda que conoce el mercado español. Ofreces alternativas reales más baratas.
+Devuelve SOLO JSON: {"misma_marca":[{"nombre":"modelo concreto","precio_aprox":"XX€","donde":"tienda"}],"alternativas":[{"marca":"otra marca real","nombre":"prenda similar","precio_aprox":"XX€","por_que":"por qué se parece"}]}.
+En "alternativas" propón 3 prendas de OTRAS marcas reales (Mango, Zara, Massimo Dutti, Uniqlo, COS, H&M, Springfield...) parecidas y MÁS BARATAS que ${price||100}€. Precios realistas del mercado español.`;
+      const altUsr=`Prenda que mira: ${q} (marca ${brand||'?'})${price?`, precio ${price}€`:''}.`;
+      const alt=await callAI(altSys,altUsr);
+      if(altBox&&alt&&(alt.alternativas?.length||alt.misma_marca?.length)){
+        let h='';
+        if(alt.misma_marca?.length){
+          h+=`<div class="shead"><h2>${brand||'Misma marca'} · dónde comprarla</h2></div>`;
+          h+=alt.misma_marca.map(a=>`<a class="offer" href="${gSearch2((brand?brand+' ':'')+a.nombre)}" target="_blank" rel="noopener"><div class="offer-img">${svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${a.nombre}</div><div class="offer-s">${a.donde||'Buscar'}</div></div><div class="offer-p">${a.precio_aprox||''}</div></a>`).join('');
+        }
+        if(alt.alternativas?.length){
+          h+=`<div class="shead"><h2>Alternativas más baratas</h2></div><div class="sub" style="margin:-4px 0 10px">Prendas parecidas de otras marcas, a mejor precio.</div>`;
+          h+=alt.alternativas.map(a=>`<a class="offer" href="${gSearch2(a.marca+' '+a.nombre)}" target="_blank" rel="noopener"><div class="offer-img">${svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${a.marca} · ${a.nombre}</div><div class="offer-s">${a.por_que||''}</div></div><div class="offer-p">${a.precio_aprox||''}</div></a>`).join('');
+        }
+        h+=`<div class="sub" style="margin-top:8px;font-size:11px">Sugerencias de IA. Toca para comparar en Google Shopping.</div>`;
+        altBox.innerHTML=h;
+      } else if(altBox){
+        altBox.innerHTML=`<a class="offer" href="${gSearch2(q+(brand?' '+brand:''))}" target="_blank" rel="noopener"><div class="offer-img">${svg('tag',20)}</div><div class="offer-info"><div class="offer-t">Buscar "${q}" en Google Shopping</div><div class="offer-s">Comparar precios</div></div><div class="offer-p">${svg('chev',18)}</div></a>`;
+      }
+    }
     out.querySelector('#sc_buy').onclick=()=>{
       trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'bought'});
       el.remove(); go('add');
