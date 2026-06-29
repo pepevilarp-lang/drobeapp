@@ -1,163 +1,168 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-let renderer, scene, camera, controls, raf, ro, container, onSelectCb;
-let clickable = [], groups = [];
-let last = 0;
+let renderer, scene, camera, raf, ro, container, onSelectCb, onFocusCb;
+let cards = [], items = [];
+let pos = 0, target = 0, lastFocus = -1;
+let dragging = false, startX = 0, startPos = 0, moved = 0, movedY = 0, startY = 0;
 const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
-const HOME = { pos: new THREE.Vector3(0, 0.5, 6.4), tgt: new THREE.Vector3(0, 0.1, 0) };
-let tween = null;
 
-function ease(x){ return 1 - Math.pow(1 - x, 3); }
+const CW = 1.7, CH = 2.45, MARGIN = 0.14, RADIUS = 0.12;
 
-export function mountWardrobe3D(cont, items, opts){
+function roundedRect(w, h, r){
+  const s = new THREE.Shape(), x = -w/2, y = -h/2;
+  s.moveTo(x+r, y); s.lineTo(x+w-r, y); s.quadraticCurveTo(x+w, y, x+w, y+r);
+  s.lineTo(x+w, y+h-r); s.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  s.lineTo(x+r, y+h); s.quadraticCurveTo(x, y+h, x, y+h-r);
+  s.lineTo(x, y+r); s.quadraticCurveTo(x, y, x+r, y);
+  return s;
+}
+function shadowTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+  g.addColorStop(0, 'rgba(20,22,27,0.30)'); g.addColorStop(1, 'rgba(20,22,27,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(64, 64, 62, 30, 0, 0, 7); ctx.fill();
+  return new THREE.CanvasTexture(c);
+}
+
+export function mountWardrobe3D(cont, its, opts){
   unmountWardrobe3D();
-  container = cont;
-  onSelectCb = (opts && opts.onSelect) || null;
+  container = cont; items = its || [];
+  onSelectCb = opts && opts.onSelect; onFocusCb = opts && opts.onFocus;
 
   const w = container.clientWidth, h = container.clientHeight || 460;
   scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0xE6E0D4, 9, 18);
-
-  camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 100);
-  camera.position.copy(HOME.pos);
+  camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 100);
+  camera.position.set(0, 0, 5.4); camera.lookAt(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(w, h);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
+  renderer.domElement.style.touchAction = 'pan-y';
 
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true; controls.dampingFactor = 0.09;
-  controls.enablePan = false;
-  controls.minDistance = 3.4; controls.maxDistance = 9;
-  controls.minPolarAngle = Math.PI * 0.33; controls.maxPolarAngle = Math.PI * 0.6;
-  controls.rotateSpeed = 0.7;
-  controls.target.copy(HOME.tgt);
+  scene.add(new THREE.AmbientLight(0xffffff, 1));
 
-  // luz
-  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-  const key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(3, 6, 5); scene.add(key);
-  const fill = new THREE.DirectionalLight(0xdfe6f0, 0.3); fill.position.set(-4, 2, 3); scene.add(fill);
-
-  const n = Math.max(1, items.length);
-  const railLen = Math.max(4.5, n * 1.35);
-
-  // pared y suelo
-  const wall = new THREE.Mesh(new THREE.PlaneGeometry(railLen + 4, 8),
-    new THREE.MeshStandardMaterial({ color: 0xEDE7DB, roughness: 1 }));
-  wall.position.set(0, 1.2, -1.6); scene.add(wall);
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(railLen + 4, 6),
-    new THREE.MeshStandardMaterial({ color: 0xDED7C8, roughness: 1 }));
-  floor.rotation.x = -Math.PI / 2; floor.position.set(0, -2.6, 0.2); scene.add(floor);
-
-  // riel
-  const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, railLen, 20),
-    new THREE.MeshStandardMaterial({ color: 0x8A7D6A, metalness: 0.5, roughness: 0.4 }));
-  rail.rotation.z = Math.PI / 2; rail.position.y = 2.05; scene.add(rail);
-
+  const shadowTex = shadowTexture();
   const loader = new THREE.TextureLoader();
-  const spacing = railLen / (n + 1);
-  clickable = []; groups = [];
+  const innerW = CW - MARGIN * 2, innerH = CH - MARGIN * 2;
 
-  items.forEach((it, i) => {
-    const x = -railLen / 2 + spacing * (i + 1);
-    const g = new THREE.Group(); g.position.set(x, 0, 0);
+  cards = items.map(function(it, i){
+    const group = new THREE.Group();
 
-    // percha
-    const hook = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.012, 8, 20, Math.PI),
-      new THREE.MeshStandardMaterial({ color: 0x6B7682, metalness: 0.6, roughness: 0.3 }));
-    hook.position.y = 1.92; hook.rotation.x = Math.PI; g.add(hook);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.04),
-      new THREE.MeshStandardMaterial({ color: 0xB9AE99, roughness: 0.6 }));
-    bar.position.y = 1.55; g.add(bar);
+    const frameMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const frame = new THREE.Mesh(new THREE.ShapeGeometry(roundedRect(CW, CH, RADIUS)), frameMat);
+    group.add(frame);
 
-    // prenda
-    const ph = 2.0, pw = 1.45;
-    const mat = new THREE.MeshBasicMaterial({ color: it.img ? 0xffffff : 0xCAD6E2, transparent: true, side: THREE.DoubleSide });
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), mat);
-    plane.position.y = 0.5; plane.userData = { item: it, group: g };
+    const imgMat = new THREE.MeshBasicMaterial({ color: 0xe9e6df, side: THREE.DoubleSide });
+    const img = new THREE.Mesh(new THREE.PlaneGeometry(innerW, innerH), imgMat);
+    img.position.z = 0.012; group.add(img);
+
     if (it.img) {
-      loader.load(it.img, (tex) => {
-        tex.colorSpace = THREE.SRGBColorSpace; mat.map = tex; mat.color.set(0xffffff); mat.needsUpdate = true;
-        const a = tex.image.width / tex.image.height; plane.scale.x = (a * ph) / pw;
-      }, undefined, () => {});
+      loader.load(it.img, function(tex){
+        tex.colorSpace = THREE.SRGBColorSpace;
+        imgMat.map = tex; imgMat.color.set(0xffffff); imgMat.needsUpdate = true;
+        const a = tex.image.width / tex.image.height;
+        let pw = innerW, ph = innerW / a;
+        if (ph > innerH) { ph = innerH; pw = innerH * a; }
+        img.scale.set(pw / innerW, ph / innerH, 1);
+      }, undefined, function(){});
     }
-    g.add(plane); clickable.push(plane); groups.push(g); scene.add(g);
+
+    const sh = new THREE.Mesh(new THREE.PlaneGeometry(CW * 1.25, CW * 0.55),
+      new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
+    sh.rotation.x = -Math.PI / 2; sh.position.y = -CH / 2 - 0.06; group.add(sh);
+
+    group.userData = { item: it, index: i, frameMat: frameMat, imgMat: imgMat };
+    scene.add(group);
+    return group;
   });
 
-  renderer.domElement.addEventListener('pointerdown', onDown);
-  renderer.domElement.addEventListener('pointerup', onUp);
-  ro = new ResizeObserver(() => {
+  const dom = renderer.domElement;
+  dom.addEventListener('pointerdown', onDown);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+
+  ro = new ResizeObserver(function(){
     if (!renderer || !container) return;
     const W = container.clientWidth, H = container.clientHeight || 460;
     renderer.setSize(W, H); camera.aspect = W / H; camera.updateProjectionMatrix();
   });
   ro.observe(container);
 
-  last = performance.now();
+  pos = 0; target = 0; lastFocus = -1;
   loop();
 }
 
-let downXY = null;
-function onDown(e){ downXY = { x: e.clientX, y: e.clientY }; }
+function onDown(e){ dragging = true; startX = e.clientX; startY = e.clientY; startPos = target; moved = 0; movedY = 0; }
+function onMove(e){
+  if (!dragging) return;
+  const dx = e.clientX - startX, dy = e.clientY - startY;
+  moved = Math.max(moved, Math.abs(dx)); movedY = Math.max(movedY, Math.abs(dy));
+  target = startPos - dx / 130;
+  target = Math.max(0, Math.min(items.length - 1, target));
+}
 function onUp(e){
-  if (!downXY) return;
-  const moved = Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y);
-  downXY = null;
-  if (moved > 8 || tween) return; // fue un giro, no un tap
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(clickable, false);
-  if (hits.length) focusTo(hits[0].object.userData);
-}
-
-function focusTo(ud){
-  const gp = ud.group.position;
-  const toT = new THREE.Vector3(gp.x, 0.5, gp.z);
-  const toP = new THREE.Vector3(gp.x, 0.75, gp.z + 2.8);
-  controls.enabled = false;
-  tween = { t: 0, dur: 0.55, fromP: camera.position.clone(), toP, fromT: controls.target.clone(), toT,
-    cb: () => { if (onSelectCb) onSelectCb(ud.item); } };
-}
-export function resetView(){
-  if (!camera) return;
-  controls.enabled = false;
-  tween = { t: 0, dur: 0.5, fromP: camera.position.clone(), toP: HOME.pos.clone(),
-    fromT: controls.target.clone(), toT: HOME.tgt.clone(), cb: () => { controls.enabled = true; } };
+  if (!dragging) return;
+  dragging = false;
+  if (moved < 6 && movedY < 10) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const py = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera({ x: px, y: py }, camera);
+    const hits = raycaster.intersectObjects(cards, true);
+    if (hits.length) {
+      let grp = hits[0].object.parent;
+      if (grp && grp.userData && grp.userData.index != null) {
+        const idx = grp.userData.index;
+        if (Math.round(pos) === idx) { onSelectCb && onSelectCb(items[idx]); }
+        else { target = idx; }
+      }
+    }
+  } else {
+    target = Math.round(target);
+  }
 }
 
 function loop(){
   raf = requestAnimationFrame(loop);
-  const now = performance.now(), dt = Math.min((now - last) / 1000, 0.05); last = now;
-  const t = now / 1000;
-  groups.forEach((g, i) => { g.children.forEach(c => { if (c.geometry && c.geometry.type === 'PlaneGeometry') c.rotation.z = Math.sin(t * 0.5 + i * 0.6) * 0.018; }); });
-  if (tween) {
-    tween.t += dt / tween.dur;
-    const e = ease(Math.min(tween.t, 1));
-    camera.position.lerpVectors(tween.fromP, tween.toP, e);
-    controls.target.lerpVectors(tween.fromT, tween.toT, e);
-    if (tween.t >= 1) { const cb = tween.cb; tween = null; cb && cb(); }
-  }
-  controls.update();
+  pos += (target - pos) * 0.15;
+  if (Math.abs(target - pos) < 0.001) pos = target;
+  const focus = Math.round(pos);
+
+  cards.forEach(function(g, i){
+    const p = i - pos, ap = Math.abs(p);
+    if (ap > 3.2) { g.visible = false; return; }
+    g.visible = true;
+    const dir = p < 0 ? -1 : 1;
+    const x = p * 0.9 + dir * Math.min(ap, 1) * 0.62;
+    const z = -Math.min(ap, 3) * 0.9;
+    const rotY = -Math.max(-1, Math.min(1, p)) * 0.82;
+    const sc = 1 - Math.min(ap, 1) * 0.14;
+    g.position.set(x, 0, z); g.rotation.y = rotY; g.scale.setScalar(sc);
+    g.renderOrder = 10 - Math.round(ap);
+    const fd = 1 - Math.min(ap, 1) * 0.22;
+    g.userData.frameMat.color.setRGB(fd, fd, fd);
+    if (g.userData.imgMat.map) { const d = 1 - Math.min(ap, 1) * 0.4; g.userData.imgMat.color.setRGB(d, d, d); }
+  });
+
+  if (focus !== lastFocus) { lastFocus = focus; if (onFocusCb && items[focus]) onFocusCb(items[focus]); }
   renderer.render(scene, camera);
 }
+
+export function resetView(){ if (cards.length) target = Math.round(pos); }
 
 export function unmountWardrobe3D(){
   if (raf) cancelAnimationFrame(raf); raf = null;
   if (ro) { ro.disconnect(); ro = null; }
-  tween = null;
+  window.removeEventListener('pointermove', onMove);
+  window.removeEventListener('pointerup', onUp);
   if (renderer) {
     renderer.domElement.removeEventListener('pointerdown', onDown);
-    renderer.domElement.removeEventListener('pointerup', onUp);
     renderer.dispose();
     if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
     renderer = null;
   }
-  if (controls) { controls.dispose(); controls = null; }
-  clickable = []; groups = []; scene = null; camera = null; container = null;
+  cards = []; scene = null; camera = null; container = null; dragging = false;
 }
