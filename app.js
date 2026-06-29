@@ -245,38 +245,52 @@ function readForm(scope){
 /* ═══════════════════════════════════════════
    IA — RECONOCIMIENTO
 ═══════════════════════════════════════════ */
-async function imageToBase64(file,maxDim=1400){
-  // 1) Intento moderno: createImageBitmap maneja HEIC y orientación EXIF en iOS
-  try{
-    if(window.createImageBitmap){
-      const bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}).catch(()=>createImageBitmap(file));
-      const sc=Math.min(1,maxDim/Math.max(bitmap.width,bitmap.height));
-      const w=Math.max(1,Math.round(bitmap.width*sc)),h=Math.max(1,Math.round(bitmap.height*sc));
-      const c=document.createElement('canvas'); c.width=w; c.height=h;
-      c.getContext('2d').drawImage(bitmap,0,0,w,h);
+async function imageToBase64(file,maxDim=1024){
+  if(!file) throw new Error('No hay archivo.');
+  if(!/^image\//.test(file.type) && !/\.(jpe?g|png|heic|heif|webp)$/i.test(file.name||'')){
+    throw new Error('El archivo no es una imagen ('+(file.type||'desconocido')+').');
+  }
+  // 1) createImageBitmap: la vía que maneja HEIC y EXIF en iOS
+  if(window.createImageBitmap){
+    try{
+      let bitmap;
+      try{ bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}); }
+      catch(_){ bitmap=await createImageBitmap(file); }
+      const out=bitmapToData(bitmap,maxDim);
       bitmap.close&&bitmap.close();
-      const dataUrl=c.toDataURL('image/jpeg',0.85);
-      return {media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h};
-    }
-  }catch(e){ /* cae al método clásico */ }
-  // 2) Fallback clásico con <img>
+      if(out) return out;
+    }catch(e){ /* sigue al fallback */ }
+  }
+  // 2) Fallback con <img> + FileReader (más compatible que objectURL en algunos iOS)
   return new Promise((res,rej)=>{
-    const url=URL.createObjectURL(file),im=new Image();
-    const to=setTimeout(()=>{ URL.revokeObjectURL(url); rej(new Error('La imagen tardó demasiado en cargar.')); },15000);
-    im.onload=()=>{
-      clearTimeout(to); URL.revokeObjectURL(url);
-      try{
-        const sc=Math.min(1,maxDim/Math.max(im.width,im.height));
-        const w=Math.max(1,Math.round(im.width*sc)),h=Math.max(1,Math.round(im.height*sc));
-        const c=document.createElement('canvas'); c.width=w; c.height=h;
-        c.getContext('2d').drawImage(im,0,0,w,h);
-        const dataUrl=c.toDataURL('image/jpeg',0.85);
-        res({media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h});
-      }catch(err){ rej(err); }
+    const fr=new FileReader();
+    const to=setTimeout(()=>rej(new Error('La imagen tardó demasiado (¿muy pesada?). Prueba con otra.')),20000);
+    fr.onerror=()=>{ clearTimeout(to); rej(new Error('No se pudo leer el archivo.')); };
+    fr.onload=()=>{
+      const im=new Image();
+      im.onload=()=>{
+        clearTimeout(to);
+        try{ const out=bitmapToData(im,maxDim); out?res(out):rej(new Error('No se pudo convertir la imagen.')); }
+        catch(err){ rej(err); }
+      };
+      im.onerror=()=>{ clearTimeout(to); rej(new Error('Formato de imagen no compatible. Prueba con JPG o PNG.')); };
+      im.src=fr.result;
     };
-    im.onerror=()=>{ clearTimeout(to); URL.revokeObjectURL(url); rej(new Error('No se pudo leer la imagen (formato no compatible).')); };
-    im.src=url;
+    fr.readAsDataURL(file);
   });
+}
+function bitmapToData(src,maxDim){
+  const sw=src.width||src.naturalWidth, sh=src.height||src.naturalHeight;
+  if(!sw||!sh) return null;
+  const sc=Math.min(1,maxDim/Math.max(sw,sh));
+  const w=Math.max(1,Math.round(sw*sc)), h=Math.max(1,Math.round(sh*sc));
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const ctx=c.getContext('2d'); if(!ctx) return null;
+  ctx.drawImage(src,0,0,w,h);
+  let dataUrl;
+  try{ dataUrl=c.toDataURL('image/jpeg',0.82); }catch(e){ return null; }
+  if(!dataUrl||dataUrl.length<100) return null;
+  return {media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h};
 }
 async function callAI(system,user,image=null){
   try{
@@ -512,16 +526,18 @@ function vAdd(m){
     <div class="title">Tu armario,<br>sin escribir nada</div>
     <div class="sub">Una foto o el ticket. Pipeline de IA especializado en moda. Nunca inventa.</div></div>
     <div style="margin-top:24px">
-      <label class="opt reveal" for="pf" style="animation-delay:.05s">
+      <div class="opt reveal" style="animation-delay:.05s;position:relative">
         <span class="ring">${svg('cam',24)}</span>
         <div><div class="t1">Fotografiar prenda</div><div class="t2">Reconocimiento especializado en moda</div></div>
-        <span class="arr">${svg('chev',20)}</span></label>
-      <input id="pf" type="file" accept="image/*" hidden/>
-      <label class="opt alt reveal" for="tf" style="animation-delay:.1s">
+        <span class="arr">${svg('chev',20)}</span>
+        <input id="pf" type="file" accept="image/*" class="file-overlay"/>
+      </div>
+      <div class="opt alt reveal" style="animation-delay:.1s;position:relative">
         <span class="ring">${svg('scan',24)}</span>
         <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · ticket vinculado</div></div>
-        <span class="arr">${svg('chev',20)}</span></label>
-      <input id="tf" type="file" accept="image/*" hidden/>
+        <span class="arr">${svg('chev',20)}</span>
+        <input id="tf" type="file" accept="image/*" class="file-overlay"/>
+      </div>
       <button class="opt alt reveal" id="manual" style="animation-delay:.15s">
         <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pen',24)}</span>
         <div><div class="t1">Añadir manualmente</div><div class="t2">Rellena los datos tú mismo</div></div>
@@ -534,19 +550,25 @@ function vAdd(m){
 
 function handleScan(m,e,kind){
   const f=e.target.files&&e.target.files[0];
-  e.target.value=''; // permite volver a elegir la misma foto
-  if(!f)return;
-  // feedback inmediato: pantalla de carga antes de procesar la imagen
+  e.target.value='';
+  if(!f){
+    m.innerHTML=`<div class="backbar"><button id="b9" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Sin imagen</span></div>
+      <div class="note warn" style="margin-top:14px">${svg('spark',18)}<span>No se recibió ninguna imagen. Si la cámara no se abrió, prueba a elegir una foto de la galería.</span></div>`;
+    m.querySelector('#b9').onclick=()=>{addMode='choose';vAdd(m);};
+    return;
+  }
+  const sizeMB=(f.size/1048576).toFixed(1);
   m.innerHTML=`
     <div class="backbar"><button id="b0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Leyendo ticket':'Reconociendo prenda'}</span></div>
-    <div class="empty" style="padding-top:80px">${svg('load',30)}<div style="margin-top:14px">Preparando imagen…</div></div>`;
+    <div class="empty" style="padding-top:80px">${svg('load',30)}<div style="margin-top:14px">Preparando imagen…</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--ink3)">${f.type||'tipo?'} · ${sizeMB} MB</div></div>`;
   m.querySelector('#b0').onclick=()=>{addMode='choose';vAdd(m);};
   imageToBase64(f)
     .then(img=>runPipeline(m,img,kind))
     .catch(err=>{
       m.innerHTML=`
         <div class="backbar"><button id="b1" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Ticket':'Prenda'}</span></div>
-        <div class="note warn" style="margin-top:14px">${svg('spark',18)}<span>No pude procesar esa foto: ${esc(err.message||'error')}. Prueba con otra foto o añade la prenda manualmente.</span></div>
+        <div class="note warn" style="margin-top:14px">${svg('spark',18)}<span>No pude procesar la foto.<br><b>Motivo:</b> ${esc(err.message||'error')}<br><b>Archivo:</b> ${esc(f.type||'?')} · ${sizeMB} MB</span></div>
         <button class="btn dark" id="man" style="margin-top:14px">${svg('pen',18)} Añadir manualmente</button>
         <button class="btn ghost" id="retry" style="margin-top:10px">Volver a intentar</button>`;
       m.querySelector('#b1').onclick=()=>{addMode='choose';vAdd(m);};
@@ -645,11 +667,12 @@ function openScannerTienda(){
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
     <div class="backbar"><button id="scb">${svg('back',20)}</button><span class="t">Estás en tienda</span></div>
     <div class="note" style="margin-bottom:16px">${svg('store',18)}<span>Haz una foto de la prenda o descríbela. Drobe busca el mejor precio de esa marca <b>y alternativas más baratas que se le parezcan</b>.</span></div>
-    <label class="opt" for="sc_photo" style="margin-bottom:14px">
+    <div class="opt" style="margin-bottom:14px;position:relative">
       <span class="ring">${svg('cam',24)}</span>
       <div><div class="t1">Foto de la prenda o etiqueta</div><div class="t2">Drobe la identifica automáticamente</div></div>
-      <span class="arr">${svg('chev',20)}</span></label>
-    <input id="sc_photo" type="file" accept="image/*" hidden/>
+      <span class="arr">${svg('chev',20)}</span>
+      <input id="sc_photo" type="file" accept="image/*" class="file-overlay"/>
+    </div>
     <div class="field"><label>O descríbela</label><input id="sc_q" placeholder="Pantalón lino azul marino Ecoalf…"/></div>
     <div class="row2">
       <div class="field"><label>Marca</label><input id="sc_brand" placeholder="Ecoalf"/></div>
