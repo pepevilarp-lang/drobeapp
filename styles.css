@@ -288,3 +288,48 @@ main{flex:1;padding:0 22px 120px}
 .sell-box{background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:14px;margin-bottom:10px}
 .sell-title{font-size:14px;font-weight:700;display:flex;align-items:center;gap:7px}
 .sell-btn{font-size:14px}
+
+/* ═══ DROBE SCORE ═══ */
+.score-pill{display:flex;align-items:center;gap:5px;font-size:13px;font-weight:700;background:var(--ink);color:#fff;border-radius:999px;padding:5px 11px}
+.score-pill svg{stroke:#fff}
+.score-card{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--hair);border-radius:16px;padding:16px;margin:16px 0}
+.sc-num{font-size:42px;font-weight:800;letter-spacing:-.04em;line-height:1}
+.sc-label{font-size:11px;color:var(--ink3);font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-top:2px}
+.sc-right{flex:1}
+.sc-bar{height:6px;background:var(--hair-2);border-radius:999px;overflow:hidden;margin-bottom:8px}
+.sc-fill{height:100%;background:var(--ink);border-radius:999px;transition:width .8s var(--ease)}
+.sc-desc{font-size:13px;color:var(--ink2);line-height:1.4}
+
+/* ═══ ADN DE ESTILO ═══ */
+.dna-card{background:var(--surface);border:1px solid var(--hair);border-radius:16px;overflow:hidden;margin-bottom:16px}
+.dna-row{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--hair-2)}
+.dna-row:last-child{border-bottom:none}
+.dna-k{font-size:13px;color:var(--ink2)}
+.dna-v{font-size:13px;font-weight:700;color:var(--ink)}
+.seg-premium{color:#8B6914;background:#FBF6E9;border-radius:999px;padding:2px 10px;font-size:12px}
+.seg-mid{color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 10px;font-size:12px}
+.seg-budget{color:var(--ink2);background:var(--surface-2);border-radius:999px;padding:2px 10px;font-size:12px}
+
+/* ═══ BRAND BARS ═══ */
+.brand-bar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.bb-name{font-size:13px;font-weight:600;width:100px;flex:none}
+.bb-track{flex:1;height:6px;background:var(--hair-2);border-radius:999px;overflow:hidden}
+.bb-fill{height:100%;background:var(--ink);border-radius:999px}
+.bb-pct{font-size:12px;color:var(--ink3);width:32px;text-align:right}
+
+/* ═══ CONSENTIMIENTO B2B ═══ */
+.consent-card{background:var(--surface);border:1px solid var(--hair);border-radius:16px;overflow:hidden;margin-bottom:16px}
+.cc-head{display:flex;align-items:center;gap:8px;padding:12px 16px;font-size:13px;font-weight:700;border-bottom:1px solid var(--hair-2);background:var(--surface-2)}
+.cc-body{padding:4px 0}
+.toggle-row{display:flex;align-items:flex-start;gap:14px;padding:13px 16px;cursor:pointer;border-bottom:1px solid var(--hair-2)}
+.toggle-row:last-child{border-bottom:none}
+.toggle-row>div{flex:1}
+.tr-title{font-size:14px;font-weight:600;margin-bottom:2px}
+.tr-sub{font-size:12px;color:var(--ink2);line-height:1.35}
+.toggle{width:44px;height:26px;border-radius:999px;appearance:none;background:var(--hair-2);position:relative;cursor:pointer;flex:none;margin-top:2px;transition:background .2s}
+.toggle:checked{background:var(--ink)}
+.toggle::after{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.toggle:checked::after{transform:translateX(18px)}
+
+/* ═══ ESCÁNER TIENDA ═══ */
+.store-badge{display:inline-flex;align-items:center;gap:6px;background:var(--ink);color:#fff;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:600}
