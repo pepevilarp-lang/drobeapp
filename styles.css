@@ -275,7 +275,7 @@ main{flex:1;padding:0 22px 120px}
 .gap-offers{margin:-2px 0 10px}
 
 /* bienvenida / onboarding */
-.welcome{min-height:100vh;display:flex;flex-direction:column;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 60px) 26px calc(env(safe-area-inset-bottom) + 30px)}
+.welcome{min-height:100vh;background:var(--paper);display:flex;flex-direction:column;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 60px) 26px calc(env(safe-area-inset-bottom) + 30px)}
 .welcome-top{text-align:center}
 .welcome-tag{font-size:17px;color:var(--ink2);margin-top:10px}
 .welcome-feats{display:flex;flex-direction:column;gap:16px;margin:30px 0}
