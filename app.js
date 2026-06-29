@@ -1190,7 +1190,7 @@ function needsWelcome(){
 function markSeen(){ try{localStorage.setItem('drobe.seen','1');}catch(e){} }
 
 function renderWelcome(mode='intro'){
-  const el=document.createElement('div'); el.className='ficha'; el.id='welcome'; el.style.background='var(--bg)';
+  const el=document.createElement('div'); el.className='ficha'; el.id='welcome'; el.style.zIndex='200';
   if(mode==='intro'){
     el.innerHTML=`<div class="welcome">
       <div class="welcome-top">
