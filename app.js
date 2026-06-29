@@ -767,55 +767,190 @@ async function searchOffers(query){
 }
 function openAsesorCompra(){
   const el=document.createElement('div'); el.className='ficha'; el.id='asesor';
+  renderAsesorForm(el);
+  document.body.appendChild(el);
+}
+
+function renderAsesorForm(el, prefill={}){
+  // Campos comunes a todas las prendas
+  // Los específicos aparecen según el tipo seleccionado
+  const TIPOS=[
+    'Camiseta manga corta','Camiseta manga larga','Polo','Camisa','Jersey','Sudadera',
+    'Hoodie','Blazer','Bomber','Chaqueta denim','Chaqueta cuero','Abrigo','Parka',
+    'Plumífero','Vaquero','Chino','Cargo','Jogger','Pantalón vestir','Shorts',
+    'Sneakers','Botas','Botines','Zapatillas deportivas','Zapatos Oxford',
+    'Mochila','Gorra','Bufanda','Otro'
+  ];
+  const COLORES=['Blanco','Negro','Gris','Marino','Azul','Verde','Caqui/Oliva','Marrón','Beige','Crudo','Rojo','Amarillo','Naranja','Rosa','Morado','Multicolor'];
+  const TALLAS_ROPA=['XS','S','M','L','XL','XXL'];
+  const TALLAS_PANTALON=['28','29','30','31','32','33','34','36','38'];
+  const TALLAS_ZAPATO=['38','39','40','41','42','43','44','45'];
+  const FITS=['Slim Fit','Regular Fit','Oversized','Relaxed','Boxy','Straight','Wide Leg'];
+  const MATERIALES=['Algodón','Algodón orgánico','Lana','Lana merino','Denim','Lino','Poliéster','Nylon','Gore-Tex','Cuero','Ante','Punto','Mezcla'];
+
+  const tipo=prefill.tipo||'';
+  const isBottom=/vaquero|chino|cargo|jogger|pantalón|shorts/i.test(tipo);
+  const isShoe=/sneak|bota|botín|zapato|zapatilla/i.test(tipo);
+  const isOuter=/abrigo|parka|plum|bomber|blazer|chaqueta/i.test(tipo);
+  const isKnit=/jersey|sudadera|hoodie/i.test(tipo);
+  const isShirt=/camisa/i.test(tipo);
+  const isTop=/camiseta manga corta|camiseta manga larga|polo/i.test(tipo);
+
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
     <div class="backbar"><button id="ab">${svg('back',20)}</button><span class="t">¿Me lo compro?</span></div>
-    <div class="sub" style="margin:-6px 0 16px">Describe la prenda que estás mirando (o pega el enlace). La IA la juzga contra tu armario — y te dice si <b>no</b> merece la pena.</div>
-    <div class="field"><label>¿Qué estás mirando?</label><input id="ac_q" placeholder="Parka verde Ecoalf, vaquero recto azul oscuro…"/></div>
-    <div class="field"><label>Precio (opcional)</label><input id="ac_p" inputmode="decimal" placeholder="120"/></div>
-    <button class="btn dark" id="ac_go">${svg('spark',18)} Analizar</button>
-    <div id="ac_out" style="margin-top:16px"></div></div>`;
-  document.body.appendChild(el);
+    <div class="sub" style="margin:-6px 0 18px">Cuantos más datos, más preciso el análisis y la búsqueda de ofertas.</div>
+
+    <div class="row2">
+      <div class="field"><label>Marca</label><input id="ac_brand" value="${esc(prefill.brand||'')}" placeholder="Stone Island, Zara…"/></div>
+      <div class="field"><label>Precio €</label><input id="ac_price" inputmode="decimal" value="${esc(prefill.price||'')}" placeholder="160"/></div>
+    </div>
+
+    <div class="field"><label>Tipo de prenda</label>
+      <select id="ac_tipo">${optSel(TIPOS,tipo)}</select></div>
+
+    <div class="row2">
+      <div class="field"><label>Color principal</label>
+        <select id="ac_color">${optSel(COLORES,prefill.color||'')}</select></div>
+      <div class="field"><label>Talla</label>
+        <select id="ac_talla">${optSel(isShoe?TALLAS_ZAPATO:isBottom?TALLAS_PANTALON:TALLAS_ROPA,prefill.talla||'')}</select></div>
+    </div>
+
+    ${!isShoe&&!isBottom?`<div class="field"><label>Corte / fit</label>
+      <select id="ac_fit">${optSel(FITS,prefill.fit||'')}</select></div>`:''}
+
+    ${(isTop||isShirt)?`<div class="field"><label>Manga</label>
+      <div class="chips" id="manga_chips">
+        ${['Manga corta','Manga larga','Sin mangas'].map(m=>`<button class="chip${(prefill.manga||'Manga corta')===m?' on':''}" data-manga="${m}">${m}</button>`).join('')}
+      </div></div>`:''}
+
+    ${isKnit?`<div class="field"><label>Tipo de punto</label>
+      <div class="chips" id="knit_chips">
+        ${['Punto fino','Punto grueso','Trenzado','Liso','Cuello alto','Cuello redondo'].map(k=>`<button class="chip${(prefill.knit||'')===k?' on':''}" data-knit="${k}">${k}</button>`).join('')}
+      </div></div>`:''}
+
+    ${isOuter?`<div class="field"><label>Características</label>
+      <div class="chips" id="outer_chips" style="flex-wrap:wrap">
+        ${['Capucha','Impermeable','Acolchado','Con forro','Sin forro','Cortavientos'].map(k=>`<button class="chip${(prefill.outer||[]).includes(k)?' on':''}" data-outer="${k}">${k}</button>`).join('')}
+      </div></div>`:''}
+
+    <div class="field"><label>Material (opcional)</label>
+      <select id="ac_mat">${optSel(['','...'].concat(MATERIALES),prefill.material||'')}</select></div>
+
+    <div class="field"><label>Notas adicionales (opcional)</label>
+      <input id="ac_notes" value="${esc(prefill.notes||'')}" placeholder="Edición limitada, colaboración, vintage…"/></div>
+
+    <button class="btn dark" id="ac_go" style="margin-top:4px">${svg('spark',18)} Analizar y buscar ofertas</button>
+    <div id="ac_out" style="margin-top:16px"></div>
+  </div>`;
+
   el.querySelector('#ab').onclick=()=>el.remove();
+
+  // chips toggleables
+  const chipsToggle=(containerId, single=true)=>{
+    const chips=el.querySelectorAll(`[data-${containerId}]`);
+    chips.forEach(b=>b.onclick=()=>{
+      if(single){ chips.forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
+      else { b.classList.toggle('on'); }
+    });
+  };
+  if(el.querySelector('[data-manga]'))chipsToggle('manga',true);
+  if(el.querySelector('[data-knit]'))chipsToggle('knit',true);
+  if(el.querySelector('[data-outer]'))chipsToggle('outer',false);
+
+  // al cambiar tipo, rerenderizar con datos actuales
+  el.querySelector('#ac_tipo').onchange=()=>{
+    const data=readAsesorForm(el);
+    renderAsesorForm(el,data);
+  };
+
   el.querySelector('#ac_go').onclick=async function(){
-    const q=el.querySelector('#ac_q').value.trim(); if(!q)return;
-    const price=parseFloat(el.querySelector('#ac_p').value)||null;
+    const data=readAsesorForm(el);
+    if(!data.tipo&&!data.brand){return;}
     const out=el.querySelector('#ac_out');
     this.disabled=true; this.innerHTML=`${svg('load',18)} Analizando…`; this.querySelector('svg').classList.add('spin');
-    // 1) Análisis honesto contra el armario (IA, gratis)
-    const sys=`Eres un asesor de compra honesto. Analizas si al usuario le conviene comprar una prenda, basándote SOLO en su armario actual.
-Devuelve SOLO JSON: {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases","ya_tienes":"qué prenda parecida ya tiene o '' si nada","looks_nuevos":número estimado}.
-Sé honesto: si ya tiene algo parecido o no encaja con su estilo, dilo y recomienda no comprar.`;
-    const usr=`Armario del usuario: ${wardrobeSummary()}.\nEstá pensando en comprar: "${q}"${price?` por ${price}€`:''}.`;
-    const r=await callAI(sys,usr);
-    // 2) Ofertas reales (si hay key de shopping)
-    const offers=await searchOffers(q);
+
+    // Construir descripción rica para IA y SerpApi
+    const desc=buildDesc(data);
+    const searchQ=buildSearchQuery(data);
+
+    const sys=`Eres un asesor de compra honesto especializado en moda. Analizas si al usuario le conviene comprar una prenda concreta, basándote SOLO en su armario actual.
+Devuelve SOLO JSON: {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"2-3 frases específicas mencionando prendas concretas de su armario","ya_tienes":"descripción de prenda parecida que ya tiene, o vacío","looks_nuevos":número,"coste_por_uso_estimado":número si tiene precio}.
+Sé brutal y honesto. Si ya tiene algo parecido, dilo. Si no aporta looks nuevos, dilo.`;
+    const usr=`Armario del usuario: ${wardrobeSummary()}.\nQuiere comprar: ${desc}${data.price?` por ${data.price}€`:''}.`;
+
+    const [r, offers]=await Promise.all([callAI(sys,usr), searchOffers(searchQ)]);
 
     let html='';
     if(r){
       const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
-      const vt={comprar:'Te conviene',dudoso:'Piénsalo',evitar:'No lo compres'}[r.veredicto]||'';
-      html+=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Veredicto<span>Solo con tu armario</span></div>
-        <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc}">${vt} · ${r.encaje||0}%</span></div>
-        <div class="say">${r.razon||''}</div>
-        ${r.ya_tienes?`<div class="sub" style="margin-top:8px">Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}
-        ${r.looks_nuevos?`<div class="sub" style="margin-top:4px">Crearía ~${r.looks_nuevos} looks nuevos.</div>`:''}</div>`;
+      const vt={comprar:'✓ Te conviene',dudoso:'⚠ Piénsalo',evitar:'✗ No lo compres'}[r.veredicto]||'';
+      html+=`<div class="advisor">
+        <div class="who"><div class="av">D</div><div class="nm">Veredicto<span>Basado en tu armario real</span></div>
+          <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div>
+        <div class="say" style="margin-top:10px">${r.razon||''}</div>
+        ${r.ya_tienes?`<div class="sub" style="margin-top:8px;color:var(--amber)">⚠ Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}
+        <div style="display:flex;gap:16px;margin-top:10px">
+          ${r.looks_nuevos!=null?`<div><div style="font-size:18px;font-weight:800;color:var(--ink)">${r.looks_nuevos}</div><div style="font-size:11px;color:var(--ink3)">looks nuevos</div></div>`:''}
+          ${r.coste_por_uso_estimado?`<div><div style="font-size:18px;font-weight:800;color:var(--ink)">${r.coste_por_uso_estimado}€</div><div style="font-size:11px;color:var(--ink3)">coste/uso est.</div></div>`:''}
+        </div></div>`;
     } else {
-      html+=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY). Aun así puedo buscar ofertas si están activadas.</span></div>`;
+      html+=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY).</span></div>`;
     }
-    // ofertas
+
     if(offers===null){
-      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Búsqueda de ofertas no activada. Añade <b>SERPAPI_KEY</b> en Vercel (100 búsquedas/mes gratis) y aquí aparecerán precios reales de tiendas.</span></div>`;
+      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Búsqueda de ofertas no activada. Añade <b>SERPAPI_KEY</b> en Vercel para ver precios reales.</span></div>`;
     } else if(offers.length){
-      html+=`<div class="shead"><h2>Mejores ofertas</h2></div>`+offers.map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
-        <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:''}</div>
-        <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
-        <div class="offer-p">${o.price||''}</div></a>`).join('');
+      html+=`<div class="shead"><h2>Mejores ofertas encontradas</h2><span class="link" style="font-size:11px">"${searchQ}"</span></div>`+
+        offers.map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
+          <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+          <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
+          <div class="offer-p">${o.price||''}</div></a>`).join('');
     } else {
-      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>No encontré ofertas para esa búsqueda. Prueba con marca + tipo de prenda.</span></div>`;
+      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Sin resultados para "${searchQ}". Prueba ajustando marca o tipo.</span></div>`;
     }
     out.innerHTML=html;
     this.disabled=false; this.innerHTML=`${svg('spark',18)} Analizar otra`;
   };
+}
+
+function readAsesorForm(el){
+  const q=id=>{ const e=el.querySelector('#'+id); return e?e.value.trim():''; };
+  const chip=attr=>{ const e=el.querySelector(`[data-${attr}].on`); return e?e.dataset[attr]:''; };
+  const chips=attr=>{ return [...el.querySelectorAll(`[data-${attr}].on`)].map(e=>e.dataset[attr]); };
+  return {
+    brand:q('ac_brand'), price:parseFloat(q('ac_price'))||null,
+    tipo:q('ac_tipo'), color:q('ac_color'), talla:q('ac_talla'),
+    fit:q('ac_fit')||'', material:q('ac_mat')||'',
+    manga:chip('manga'), knit:chip('knit'), outer:chips('outer'),
+    notes:q('ac_notes')
+  };
+}
+
+function buildDesc(d){
+  const parts=[];
+  if(d.brand)parts.push(d.brand);
+  if(d.tipo)parts.push(d.tipo);
+  if(d.manga)parts.push(d.manga);
+  if(d.knit)parts.push(d.knit);
+  if(d.outer&&d.outer.length)parts.push(d.outer.join(', '));
+  if(d.fit)parts.push(d.fit);
+  if(d.color)parts.push(d.color);
+  if(d.material)parts.push(d.material);
+  if(d.talla)parts.push('talla '+d.talla);
+  if(d.notes)parts.push(d.notes);
+  return parts.join(' ') || 'prenda sin especificar';
+}
+
+function buildSearchQuery(d){
+  // Construir query de búsqueda concreta para SerpApi
+  const parts=[];
+  if(d.brand)parts.push(d.brand);
+  if(d.tipo)parts.push(d.tipo.toLowerCase());
+  if(d.color&&d.color!=='Multicolor')parts.push(d.color.toLowerCase());
+  if(d.manga&&!/larga/i.test(d.tipo))parts.push(d.manga.toLowerCase());
+  if(d.material&&d.material!=='...')parts.push(d.material.toLowerCase());
+  if(d.talla)parts.push(d.talla);
+  return parts.join(' ') || (d.tipo||'ropa');
 }
 
 /* ═══════════════════════════════════════════
