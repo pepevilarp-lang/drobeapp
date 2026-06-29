@@ -117,7 +117,7 @@ function renderFicha(){
   var photos=[g.img].concat(g.photos||[]);
   var onSale=g.status==='venta';
   var el=document.createElement('div');el.className='ficha';el.id='ficha';
-  el.innerHTML='<div class="ficha-hero"><button class="ficha-close" id="fclose">'+svg('back',20)+'</button>'+
+  el.innerHTML='<div class="ficha-hero"><button class="ficha-close" id="fclose">'+svg('back',20)+'</button><button class="ficha-edit" id="fedit">'+svg('pen',18)+'</button>'+
       '<div class="track" id="track">'+photos.map(function(p){return '<img src="'+p+'"/>'}).join('')+'</div>'+
       (photos.length>1?'<div class="ficha-dots">'+photos.map(function(_,i){return '<i class="'+(i===0?'on':'')+'"></i>'}).join('')+'</div>':'')+'</div>'+
     '<div class="ficha-body">'+
@@ -142,6 +142,7 @@ function renderFicha(){
     '</div>';
   document.body.appendChild(el);
   el.querySelector('#fclose').onclick=closeFicha;
+  var fed=el.querySelector('#fedit');if(fed)fed.onclick=function(){editGarment(g)};
   var track=el.querySelector('#track'),dots=el.querySelectorAll('.ficha-dots i');
   if(track&&dots.length)track.onscroll=function(){var i=Math.round(track.scrollLeft/track.clientWidth);Array.prototype.forEach.call(dots,function(d,j){d.className=j===i?'on':''})};
   Array.prototype.forEach.call(el.querySelectorAll('[data-c]'),function(b){b.onclick=function(){openFicha(b.dataset.c)}});
@@ -155,6 +156,16 @@ function renderFicha(){
   });
 }
 function spec(l,v,eco){return '<div class="spec"><div class="l">'+l+'</div><div class="v'+(eco?' eco':'')+'">'+v+'</div></div>'}
+function editGarment(g){
+  var el=document.createElement('div');el.className='ficha';el.id='edit';
+  el.innerHTML='<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">'+
+    '<div class="backbar"><button id="eb" style="color:var(--ink)">'+svg('back',20)+'</button><span class="t">Editar prenda</span></div>'+
+    garmentFormHTML(g,{})+
+    '<button class="btn dark" id="esave" style="margin-top:6px">'+svg('check',18)+'Guardar cambios</button></div>';
+  document.body.appendChild(el);
+  el.querySelector('#eb').onclick=function(){el.remove()};
+  el.querySelector('#esave').onclick=function(){var d=readForm(el);Object.assign(g,d);save();if(session)cloud.pushGarment(g);el.remove();renderFicha();render()};
+}
 
 /* ---------------- formulario de prenda (reutilizable) ---------------- */
 var CATS=['Camisetas','Camisas','Polos','Sudaderas','Jers\u00e9is','Chaquetas','Abrigos','Parkas','Plumas / Acolchados','Pantalones','Vaqueros','Shorts','Faldas','Vestidos','Calzado','Accesorios'];
@@ -220,17 +231,20 @@ function handleScan(m,e,kind){
   });
 }
 function showPrenda(m,r,img){
-  if(!r)r={brand:'Marca no detectada',name:'Camiseta',category:'Camisetas',fit:'Regular Fit',color:'\u2014',colors:['\u2014'],material:'Algod\u00f3n',season:'Todo el a\u00f1o',formality:'Casual',confidence:{brand:0.4,name:0.6,fit:0.55,material:0.5}};
-  var c=r.confidence||{};
-  var rows=[['Marca',r.brand,c.brand],['Prenda',r.name,c.name],['Tipo',r.category,0.9],['Corte',r.fit,c.fit],['Color',(r.colors||[r.color]).join(' \u00b7 '),0.85],['Material',r.material,c.material],['Temporada',r.season,0.8],['Formalidad',r.formality,0.8]];
-  m.querySelector('#stage').innerHTML='<div class="note" style="margin-bottom:16px">'+svg('check',18)+'<span>Catalogado. Los datos con baja confianza est\u00e1n en naranja para que los revises.</span></div>'+
-    rows.map(function(x,i){var cf=(x[2]==null?1:x[2]);var low=cf<0.6;return '<div class="conf'+(low?' low':'')+'" style="animation-delay:'+(i*0.05)+'s"><span class="k">'+x[0]+'</span>'+
-      (low?'<span class="vv"><input value="'+(x[1]||'')+'" data-edit="'+i+'"/></span>':'<span class="vv">'+(x[1]||'\u2014')+'</span>')+
-      stars(cf)+'<span class="confpct">'+Math.round(cf*100)+'%</span></div>'}).join('')+
-    '<button class="btn dark" id="conf" style="margin-top:14px">'+svg('add',18,2)+'A\u00f1adir al armario</button>';
-  m.querySelector('#conf').onclick=function(){
-    var get=function(i,def){var inp=m.querySelector('[data-edit="'+i+'"]');return inp?inp.value:def};
-    addGarment({brand:get(0,r.brand),name:get(1,r.name),cat:r.category,fit:get(3,r.fit),color:(r.colors&&r.colors[0])||r.color||'\u2014',colors:r.colors||[r.color||'\u2014'],material:get(5,r.material),size:'',season:r.season,formality:r.formality,bought:'Hoy',store:'',price:0,cond:'Como nuevo',worn:0,lastWorn:'\u2014',status:'uso',img:img.dataUrl,photos:[],docs:[],tags:[]});
+  var failed=!r;
+  var conf=(r&&r.confidence)||{};
+  var p=r?{brand:r.brand,name:r.name,cat:r.category,fit:r.fit,color:(r.colors&&r.colors[0])||r.color,colors:r.colors,material:r.material,season:r.season,formality:r.formality,cond:'Como nuevo'}
+         :{cond:'Como nuevo',season:'Todo el a\u00f1o',fit:'Regular Fit',formality:'Casual'};
+  var stage=m.querySelector('#stage');
+  stage.innerHTML=(failed
+      ?'<div class="note" style="margin-bottom:14px;background:#FCF6EF;color:#8a5a1f">'+svg('spark',18)+'<span>No pude analizar la foto autom\u00e1ticamente (revisa la API key o la conexi\u00f3n). Rellena los datos a mano \u2014 nunca invento.</span></div>'
+      :'<div class="note" style="margin-bottom:14px">'+svg('check',18)+'<span>Esto es lo que he detectado. Las estrellas marcan mi confianza; corrige lo que haga falta antes de guardar.</span></div>')+
+    '<div class="scanimg"><img src="'+img.dataUrl+'"/></div>'+
+    garmentFormHTML(p,conf)+
+    '<button class="btn dark" id="conf" style="margin-top:6px">'+svg('add',18,2)+'A\u00f1adir al armario</button>';
+  stage.querySelector('#conf').onclick=function(){
+    var d=readForm(stage);
+    addGarment(Object.assign({},d,{bought:'Hoy',worn:0,lastWorn:'\u2014',status:'uso',img:img.dataUrl,photos:[],docs:[],tags:[]}));
     addMode='choose';go('armario');
   };
 }
@@ -307,4 +321,4 @@ function initCloud(){if(!cloud.cloudEnabled())return;cloud.getSession().then(fun
 function syncFromCloud(){if(!session)return Promise.resolve();return cloud.pullGarments().then(function(rows){
   if(rows&&rows.length===0&&store.garments.length){return Promise.all(store.garments.map(function(g){return cloud.pushGarment(g,true)})).then(function(){return cloud.pullGarments()})}
   return rows;
-}).then(function(rows){if(rows){store.garments=rows.map(function(r){var g=cloud.fromRow(r);g.cat=g.category||g.cat||'Camisetas';g.fit=g.fit||'Regular Fit';g.colors=g.colors||[g.color];g.docs=g.docs||[];g.photos=g.photos||[];return g});save()}})}|[g.color];g.docs=g.docs||[];g.photos=g.photos||[];return g});save()}})}
+}).then(function(rows){if(rows){store.garments=rows.map(function(r){var g=cloud.fromRow(r);g.cat=g.category||g.cat||'Camisetas';g.fit=g.fit||'Regular Fit';g.colors=g.colors||[g.color];g.docs=g.docs||[];g.photos=g.photos||[];return g});save()}})}
