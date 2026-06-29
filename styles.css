@@ -252,7 +252,7 @@ main{flex:1;padding:0 22px 120px}
 
 /* navegación calendario */
 .cal-head{display:flex;align-items:center;justify-content:space-between;font-size:15px;font-weight:700;margin-bottom:10px;color:var(--ink)}
-.cal-nav{width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:var(--ink2);background:var(--surface);border:1px solid var(--hair)}
+.cal-nav{width:38px;height:38px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;line-height:1;color:var(--ink);background:var(--surface);border:1px solid var(--hair)}
 .cal-nav:disabled{opacity:.3}
 .cal-nav:active{transform:scale(.92)}
 
