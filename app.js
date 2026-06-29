@@ -446,7 +446,7 @@ function showPrenda(m,r,img){
 
   stage.innerHTML=`
     ${failed
-      ?`<div class="note warn" style="margin-bottom:14px">${svg('spark',18)}<span>No pude analizar la foto automáticamente — revisa que ANTHROPIC_API_KEY está configurada en Vercel. Rellena a mano, nunca invento.</span></div>`
+      ?`<div class="note warn" style="margin-bottom:14px">${svg('spark',18)}<span>No pude analizar la foto automáticamente — revisa que GROQ_API_KEY está configurada en Vercel. Rellena a mano, nunca invento.</span></div>`
       : hasLow
         ?`<div class="note warn" style="margin-bottom:14px">${svg('spark',18)}<span>Datos con confianza baja marcados en naranja. Revisa y corrige antes de guardar.</span></div>`
         :`<div class="note" style="margin-bottom:14px">${svg('check',18)}<span>Prenda catalogada. Todos los datos con alta confianza. Edita lo que necesites.</span></div>`}
@@ -536,9 +536,9 @@ function buildCalendar(el){
   const atCurrentMonth = year===today.getFullYear() && month===today.getMonth();
   cal.innerHTML=`
     <div class="cal-head">
-      <button class="cal-nav" id="cal_prev" ${atCurrentMonth?'disabled':''}>${svg('back',18)}</button>
+      <button class="cal-nav" id="cal_prev" ${atCurrentMonth?'disabled':''} aria-label="Mes anterior">‹</button>
       <span>${months[month]} ${year}</span>
-      <button class="cal-nav" id="cal_next">${svg('chev',18)}</button>
+      <button class="cal-nav" id="cal_next" aria-label="Mes siguiente">›</button>
     </div>
     <div class="cal-grid">
       ${['L','M','X','J','V','S','D'].map(d=>`<div class="cal-day-name">${d}</div>`).join('')}
@@ -800,7 +800,7 @@ Sé honesto: si ya tiene algo parecido o no encaja con su estilo, dilo y recomie
         ${r.ya_tienes?`<div class="sub" style="margin-top:8px">Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}
         ${r.looks_nuevos?`<div class="sub" style="margin-top:4px">Crearía ~${r.looks_nuevos} looks nuevos.</div>`:''}</div>`;
     } else {
-      html+=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa ANTHROPIC_API_KEY). Aun así puedo buscar ofertas si están activadas.</span></div>`;
+      html+=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY). Aun así puedo buscar ofertas si están activadas.</span></div>`;
     }
     // ofertas
     if(offers===null){
@@ -839,7 +839,7 @@ Máximo 4 faltas, las más útiles.`;
   const usr=`Armario actual por categorías: ${JSON.stringify(groups)}. Prendas: ${wardrobeSummary()}.`;
   callAI(sys,usr).then(async r=>{
     const out=el.querySelector('#h_out');
-    if(!r||!r.faltas){ out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa ANTHROPIC_API_KEY). Pero a ojo: te faltan pantalones y calzado para completar looks.</span></div>`; return; }
+    if(!r||!r.faltas){ out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY). Pero a ojo: te faltan pantalones y calzado para completar looks.</span></div>`; return; }
     out.innerHTML=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Tu armario<span>Análisis de huecos</span></div></div><div class="say">${r.resumen||''}</div></div>`+
       `<div class="shead"><h2>Lo que te cundiría</h2></div>`+
       r.faltas.map((f,i)=>`<div class="gap" data-q="${esc(f.busqueda||f.prenda)}">
