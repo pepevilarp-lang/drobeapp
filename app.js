@@ -36,7 +36,7 @@ var cpw = function(g){return g.price/Math.max(g.worn,1)};
 
 var KEY='drobe.v2';
 var store = load();
-function load(){try{var r=localStorage.getItem(KEY);if(r){var s=JSON.parse(r);if(s.garments)return s}}catch(e){}return {garments:JSON.parse(JSON.stringify(SEED))}}
+function load(){try{var r=localStorage.getItem(KEY);if(r){var s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};return s}}}catch(e){}return {garments:JSON.parse(JSON.stringify(SEED)),profile:{}}}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){}}
 function findG(id){return store.garments.find(function(g){return g.id==id})}
 function addGarment(g){g.id=g.id||('g'+Date.now()+Math.floor(Math.random()*999));store.garments.unshift(g);save();if(session)cloud.pushGarment(g)}
@@ -268,7 +268,7 @@ function vEstilista(m){
   m.innerHTML='<div class="reveal"><div class="eyebrow">Estilista</div><div class="title">Tu asesor<br>de imagen</div><div class="sub">Decisiones sobre la ropa que ya tienes. Nunca sobre la que no.</div></div>'+
     '<div class="intent reveal" style="animation-delay:.05s">'+intents.map(function(x){return '<button data-i="'+x[0]+'">'+x[1]+'</button>'}).join('')+'</div>'+
     '<div id="adv">'+advisorCard(stylistMsg||defaultAdvice())+'</div>';
-  Array.prototype.forEach.call(m.querySelectorAll('[data-i]'),function(b){b.onclick=function(){var a=document.getElementById('adv');a.style.opacity=0;setTimeout(function(){stylistMsg=advice(b.dataset.i);a.innerHTML=advisorCard(stylistMsg);a.style.transition='opacity .4s var(--ease)';a.style.opacity=1;bindOutfit(a)},170)}});
+  Array.prototype.forEach.call(m.querySelectorAll('[data-i]'),function(b){b.onclick=function(){if(b.dataset.i==='viaje'){openMaleta();return;}var a=document.getElementById('adv');a.style.opacity=0;setTimeout(function(){stylistMsg=advice(b.dataset.i);a.innerHTML=advisorCard(stylistMsg);a.style.transition='opacity .4s var(--ease)';a.style.opacity=1;bindOutfit(a)},170)}});
   bindOutfit(document.getElementById('adv'));
 }
 function bindOutfit(s){Array.prototype.forEach.call(s.querySelectorAll('[data-o]'),function(b){b.onclick=function(){openFicha(b.dataset.o)}})}
@@ -297,12 +297,109 @@ function vInsights(m){
 }
 
 /* ---------------- PERFIL ---------------- */
+/* ---------------- HACER MALETA ---------------- */
+var TRIP={dest:'',days:3,weather:'Templado',plans:['Casual']};
+var WEIGHT={'Camisetas':.2,'Polos':.25,'Camisas':.3,'Sudaderas':.5,'Jers\u00e9is':.5,'Chaquetas':.8,'Abrigos':1.2,'Parkas':1.3,'Plumas / Acolchados':.9,'Pantalones':.6,'Vaqueros':.7,'Shorts':.3,'Faldas':.3,'Calzado':.8,'Accesorios':.15};
+var NEUTRAL=['Blanco','Negro','Gris','Crudo','Marino','Azul marino','Beige'];
+function wkg(c){return WEIGHT[c]||.3}
+function planTrip(){
+  var days=TRIP.days,wx=TRIP.weather;
+  var pool=store.garments.filter(function(g){return g.status!=='venta'});
+  var isTop=function(g){return ['Camisetas','Camisas','Polos','Sudaderas','Tops'].indexOf(g.cat)>=0};
+  var isLayer=function(g){return ['Jers\u00e9is','Chaquetas','Abrigos','Parkas','Plumas / Acolchados'].indexOf(g.cat)>=0};
+  var isBottom=function(g){return ['Pantalones','Vaqueros','Shorts','Faldas'].indexOf(g.cat)>=0};
+  var isShoe=function(g){return g.cat==='Calzado'};
+  var seasonOk=function(g){if(wx==='Calor')return g.season!=='Oto\u00f1o/Invierno';if(wx==='Fr\u00edo')return g.season!=='Primavera/Verano';return true};
+  var score=function(g){var s=(g.worn||0);if(NEUTRAL.indexOf(g.color)>=0)s+=6;if(seasonOk(g))s+=8;return s};
+  var take=function(arr,n){return arr.slice().sort(function(a,b){return score(b)-score(a)}).slice(0,Math.max(0,n))};
+  var nTops=Math.max(2,Math.ceil(days*0.8)),nBottoms=Math.max(1,Math.ceil(days/3)+1),nLayer=(wx==='Fr\u00edo'||wx==='Lluvia')?2:1,nShoe=days>4?2:1;
+  var sel=[].concat(take(pool.filter(isTop),nTops),take(pool.filter(isLayer),nLayer),take(pool.filter(isBottom),nBottoms),take(pool.filter(isShoe),nShoe));
+  var seen={};sel=sel.filter(function(g){if(seen[g.id])return false;seen[g.id]=1;return true});
+  return {sel:sel,tops:sel.filter(isTop),bottoms:sel.filter(isBottom),layers:sel.filter(isLayer),shoes:sel.filter(isShoe)};
+}
+function openMaleta(){var el=document.createElement('div');el.className='ficha';el.id='trip';document.body.appendChild(el);maletaSetup(el)}
+function maletaSetup(el){
+  el.innerHTML='<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">'+
+    '<div class="backbar"><button id="mb" style="color:var(--ink)">'+svg('back',20)+'</button><span class="t">Preparar viaje</span></div>'+
+    '<div class="sub" style="margin:-8px 0 16px">Solo lo necesario. La maleta se llena con tu armario \u2014 nunca con ropa que no tienes.</div>'+
+    '<div class="field"><label>Destino</label><input id="m_dest" value="'+esc(TRIP.dest)+'" placeholder="Lisboa"/></div>'+
+    '<div class="field"><label>D\u00edas</label><div class="stepper"><button id="m_minus">\u2212</button><span class="val" id="m_days">'+TRIP.days+'</span><button id="m_plus">+</button></div></div>'+
+    '<div class="field"><label>Clima</label><div class="chips" id="m_wx">'+['Calor','Templado','Fr\u00edo','Lluvia'].map(function(w){return '<button class="chip '+(TRIP.weather===w?'on':'')+'" data-wx="'+w+'">'+w+'</button>'}).join('')+'</div></div>'+
+    '<div class="field"><label>Plan</label><div class="chips" id="m_plan">'+['Casual','Trabajo','Deporte','Noche','Playa'].map(function(p){return '<button class="chip '+(TRIP.plans.indexOf(p)>=0?'on':'')+'" data-pl="'+p+'">'+p+'</button>'}).join('')+'</div></div>'+
+    '<button class="btn dark" id="m_go" style="margin-top:8px">'+svg('spark',18)+'Preparar maleta</button></div>';
+  el.querySelector('#mb').onclick=function(){el.remove()};
+  el.querySelector('#m_dest').onchange=function(){TRIP.dest=this.value};
+  el.querySelector('#m_minus').onclick=function(){TRIP.days=Math.max(1,TRIP.days-1);el.querySelector('#m_days').textContent=TRIP.days};
+  el.querySelector('#m_plus').onclick=function(){TRIP.days=Math.min(21,TRIP.days+1);el.querySelector('#m_days').textContent=TRIP.days};
+  Array.prototype.forEach.call(el.querySelectorAll('[data-wx]'),function(b){b.onclick=function(){TRIP.weather=b.dataset.wx;Array.prototype.forEach.call(el.querySelectorAll('[data-wx]'),function(x){x.className='chip'+(x.dataset.wx===TRIP.weather?' on':'')})}});
+  Array.prototype.forEach.call(el.querySelectorAll('[data-pl]'),function(b){b.onclick=function(){var p=b.dataset.pl,i=TRIP.plans.indexOf(p);if(i>=0)TRIP.plans.splice(i,1);else TRIP.plans.push(p);b.className='chip'+(TRIP.plans.indexOf(p)>=0?' on':'')}});
+  el.querySelector('#m_go').onclick=function(){TRIP.dest=el.querySelector('#m_dest').value;maletaPack(el)};
+}
+function maletaPack(el){
+  var plan=planTrip(),items=plan.sel;
+  var weight=items.reduce(function(s,g){return s+wkg(g.cat)},0);
+  var looks=Math.max(plan.tops.length,1)*Math.max(plan.bottoms.length,1);
+  var missing=[];
+  if(plan.bottoms.length===0)missing.push('No tienes pantalones registrados \u2014 a\u00f1\u00e1delos para maletas completas.');
+  if(plan.shoes.length===0)missing.push('Sin calzado en el armario.');
+  if((TRIP.weather==='Lluvia'||TRIP.weather==='Fr\u00edo')&&plan.layers.length===0)missing.push('No hay abrigo para el fr\u00edo o la lluvia.');
+  el.innerHTML='<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">'+
+    '<div class="backbar"><button id="mb2" style="color:var(--ink)">'+svg('back',20)+'</button><span class="t">'+(TRIP.dest||'Tu viaje')+'</span></div>'+
+    '<div class="eyebrow">Maleta para</div><div class="ficha-n" style="margin-bottom:4px">'+TRIP.days+' d\u00edas \u00b7 '+TRIP.weather+'</div>'+
+    '<div class="suitcase"><div class="handle"></div><div class="case-body">'+
+      (items.length?items.map(function(g,i){return '<div class="packtile" style="animation-delay:'+(i*0.12)+'s"><img src="'+g.img+'"/></div>'}).join(''):'<div class="sub" style="grid-column:1/4;color:#cdd2da;text-align:center;padding:40px 0">Tu armario est\u00e1 vac\u00edo para este viaje.</div>')+
+    '</div></div>'+
+    '<div id="tripsum" style="opacity:0;transition:opacity .5s var(--ease)"></div></div>';
+  el.querySelector('#mb2').onclick=function(){maletaSetup(el)};
+  var must=items.slice().sort(function(a,b){return (b.worn||0)-(a.worn||0)}).slice(0,3);
+  setTimeout(function(){
+    var sum=el.querySelector('#tripsum');if(!sum)return;
+    sum.innerHTML='<div class="row2" style="margin-top:18px"><div class="stat"><div class="n">'+looks+'</div><div class="l">Looks posibles</div></div><div class="stat"><div class="n">'+items.length+'</div><div class="l">Prendas</div></div></div>'+
+      '<div class="shead"><h2>Capacidad</h2></div><div class="capbar"><i style="width:'+Math.min(100,Math.round(weight/10*100))+'%"></i></div><div class="sub" style="margin-top:8px">~'+weight.toFixed(1)+' kg estimados \u00b7 cabina \u2248 10 kg</div>'+
+      (must.length?'<div class="shead"><h2>Imprescindibles</h2></div>'+must.map(function(g){return '<div class="chk"><span class="ic">'+svg('check',16)+'</span><span>'+g.brand+' '+g.name+'</span></div>'}).join(''):'')+
+      (missing.length?'<div class="shead"><h2>No te olvides</h2></div>'+missing.map(function(x){return '<div class="chk warn"><span class="ic">'+svg('spark',16)+'</span><span>'+x+'</span></div>'}).join(''):'');
+    sum.style.opacity=1;
+  },items.length*120+450);
+}
+
+/* ---------------- perfil: estilo + tallas ---------------- */
+var CHEX={'Blanco':'#E7E3DA','Gris':'#AEB4BA','Negro':'#1F2126','Crudo':'#E9DFC9','Marino':'#2B3A5B','Mostaza':'#C99A3E'};
+function modeOf(arr){var m={},best=null,bc=0;arr.forEach(function(v){if(!v)return;m[v]=(m[v]||0)+1;if(m[v]>bc){bc=m[v];best=v}});return best}
+function styleCardHTML(){
+  var gs=store.garments;if(!gs.length)return '';
+  var col={};gs.forEach(function(g){if(g.color)col[g.color]=(col[g.color]||0)+1});
+  var tc=Object.keys(col).sort(function(a,b){return col[b]-col[a]}).slice(0,2);
+  var brand=modeOf(gs.map(function(g){return g.brand}));
+  var fit=modeOf(gs.map(function(g){return g.fit}));
+  var formal=modeOf(gs.map(function(g){return g.formality}));
+  var pr=gs.map(function(g){return g.price}).filter(Boolean);
+  var avg=pr.length?Math.round(pr.reduce(function(a,b){return a+b},0)/pr.length):0;
+  var swatches=tc.map(function(c){return '<span class="swatch" style="background:'+(CHEX[c]||'#bbb')+'"></span>'+c}).join('  ');
+  return '<div class="advisor reveal" style="animation-delay:.05s;margin-top:0"><div class="eyebrow">Tu estilo, aprendido</div>'+
+    '<div class="say" style="margin-top:10px">Te mueves en '+swatches+'. Marca recurrente: <b>'+(brand||'\u2014')+'</b>. Corte predominante <b>'+(fit||'\u2014')+'</b>, registro <b>'+((formal||'').toLowerCase()||'\u2014')+'</b>. Gasto medio por prenda: <b>'+avg+' \u20ac</b>.</div></div>';
+}
+function brandSizes(){var m={};store.garments.forEach(function(g){if(!g.brand||!g.size)return;m[g.brand]=m[g.brand]||{};m[g.brand][g.size]=(m[g.brand][g.size]||0)+1});
+  return Object.keys(m).map(function(b){var sz=m[b];var best=Object.keys(sz).sort(function(a,b2){return sz[b2]-sz[a]})[0];return {brand:b,size:best}})}
+function sizesCardHTML(){
+  var bs=brandSizes();var p=(store.profile&&store.profile.measures)||{};
+  return '<div class="shead"><h2>Tu talla por marca</h2></div>'+
+    (bs.length?bs.map(function(x){return '<div class="sizerow"><span class="bn">'+x.brand+'</span><span class="sz">'+x.size+'</span></div>'}).join(''):'<div class="sub">A\u00f1ade prendas con talla y Drobe aprende tu talla por marca.</div>')+
+    '<div class="shead"><h2>Medidas</h2></div><div class="measure">'+
+    [['altura','Altura (cm)'],['peso','Peso (kg)'],['pecho','Pecho (cm)'],['cintura','Cintura (cm)'],['pie','Pie (EU)']].map(function(f){
+      return '<div class="field" style="margin-bottom:0"><label>'+f[1]+'</label><input id="ms_'+f[0]+'" inputmode="numeric" value="'+esc(p[f[0]]||'')+'"/></div>'}).join('')+'</div>';
+}
+function bindMeasures(scope){
+  ['altura','peso','pecho','cintura','pie'].forEach(function(k){var e=scope.querySelector('#ms_'+k);if(e)e.onchange=function(){store.profile=store.profile||{};store.profile.measures=store.profile.measures||{};store.profile.measures[k]=this.value;save()}});
+}
+
 function vPerfil(m){
   m.innerHTML='<div class="reveal"><div style="display:flex;align-items:center;gap:14px;margin:10px 0 22px"><div style="width:60px;height:60px;border-radius:999px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800">P</div><div><div style="font-size:19px;font-weight:700;letter-spacing:-.02em">Pepe Vilar</div><div class="sub" style="margin-top:2px">Barcelona \u00b7 '+store.garments.length+' prendas</div></div></div></div>'+
-    '<div class="advisor reveal" style="animation-delay:.05s;margin-top:0"><div class="eyebrow">Tu estilo, aprendido</div><div class="say" style="margin-top:10px">Minimalista y de neutros. Algod\u00f3n limpio para el d\u00eda, punto premium cuando refresca. Cuidas la marca pero huyes del logo ruidoso.</div></div>'+
+    styleCardHTML()+
+    sizesCardHTML()+
     '<div id="authslot"></div>'+
     '<div class="shead"><h2>Ajustes</h2></div>'+['Cuenta y sincronizaci\u00f3n','Notificaciones','Privacidad y datos','Acerca de Drobe'].map(function(t,i){return '<div class="opt reveal" style="animation-delay:'+(0.1+i*0.04)+'s;padding:15px 18px"><div class="t1" style="font-size:15px">'+t+'</div><span class="arr" style="margin-left:auto">'+svg('chev',20)+'</span></div>'}).join('');
   renderAuth(m.querySelector('#authslot'));
+  bindMeasures(m);
 }
 function renderAuth(slot){
   if(!slot)return;
