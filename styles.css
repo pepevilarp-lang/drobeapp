@@ -339,3 +339,7 @@ main{flex:1;padding:0 22px 120px}
 .save-banner svg{stroke:#fff;flex:none}
 .offer.best{border:2px solid var(--eco);background:#F2FBF6}
 .offer.best .offer-p{color:var(--eco)}
+
+/* input de archivo superpuesto e invisible (fiable en iOS, mejor que hidden+label) */
+.file-overlay{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
+.file-overlay::-webkit-file-upload-button{cursor:pointer}
