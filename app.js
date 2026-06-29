@@ -1,4 +1,13 @@
-import { mountWardrobe3D, unmountWardrobe3D, resetView } from './wardrobe3d.js';
+/* El 3D (Three.js) se carga DINÁMICAMENTE y de forma opcional.
+   Si Safari iOS no resuelve el importmap, la app arranca igual sin 3D. */
+let _ward3d = null;
+async function load3D(){
+  if(_ward3d) return _ward3d;
+  try{ _ward3d = await import('./wardrobe3d.js'); return _ward3d; }
+  catch(e){ return null; }
+}
+function unmountWardrobe3D(){ try{ _ward3d?.unmountWardrobe3D?.(); }catch(e){} }
+function resetView(){ try{ _ward3d?.resetView?.(); }catch(e){} }
 
 /* Manejo de errores visible en móvil (si la app no llega a renderizar) */
 window.addEventListener('error',e=>{
@@ -326,13 +335,17 @@ function vArmario(m){
   m.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{ if(wardMode!==b.dataset.mode){unmountWardrobe3D();wardMode=b.dataset.mode;vArmario(m);} });
   const ward=m.querySelector('#ward');
   if(wardMode==='3d'){
-    ward.innerHTML=`<div class="stage3d" id="stage"><div class="hint">Desliza para pasar · toca el centro para abrir</div></div><div class="wardcap" id="wardcap"></div>`;
-    try{
-      mountWardrobe3D(ward.querySelector('#stage'),store.garments,{
-        onSelect:it=>openFicha(it.id),
-        onFocus:it=>{ const c=document.getElementById('wardcap'); if(c)c.innerHTML=`<div class="wc-b">${it.brand}</div><div class="wc-n">${it.name}</div>`; }
-      });
-    }catch(e){ ward.innerHTML=`<div class="empty" style="padding-top:120px">Tu dispositivo no soporta 3D.</div>`; }
+    ward.innerHTML=`<div class="stage3d" id="stage"><div class="hint">Cargando vestidor 3D…</div></div><div class="wardcap" id="wardcap"></div>`;
+    load3D().then(mod=>{
+      if(!mod||!mod.mountWardrobe3D){ wardMode='grid'; vArmario(m); return; }
+      try{
+        mod.mountWardrobe3D(ward.querySelector('#stage'),store.garments,{
+          onSelect:it=>openFicha(it.id),
+          onFocus:it=>{ const c=document.getElementById('wardcap'); if(c)c.innerHTML=`<div class="wc-b">${it.brand}</div><div class="wc-n">${it.name}</div>`; }
+        });
+        const h=ward.querySelector('.hint'); if(h)h.textContent='Desliza para pasar · toca el centro para abrir';
+      }catch(e){ wardMode='grid'; vArmario(m); }
+    });
   } else {
     const cats=['Todo','En venta',...new Set(store.garments.map(g=>g.catGroup||g.cat))];
     const list=store.garments.filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':(g.catGroup||g.cat)===gridFilter);
