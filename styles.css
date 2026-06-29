@@ -333,3 +333,9 @@ main{flex:1;padding:0 22px 120px}
 
 /* ═══ ESCÁNER TIENDA ═══ */
 .store-badge{display:inline-flex;align-items:center;gap:6px;background:var(--ink);color:#fff;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:600}
+
+/* escáner tienda: banner de ahorro y mejor oferta */
+.save-banner{background:linear-gradient(135deg,#1a7a4a,#22a05f);color:#fff;border-radius:12px;padding:12px 14px;font-size:14px;display:flex;align-items:center;gap:8px;margin-bottom:10px;line-height:1.35}
+.save-banner svg{stroke:#fff;flex:none}
+.offer.best{border:2px solid var(--eco);background:#F2FBF6}
+.offer.best .offer-p{color:var(--eco)}
