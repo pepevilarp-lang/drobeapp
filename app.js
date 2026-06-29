@@ -204,7 +204,10 @@ Formato de respuesta:
 
 const TICKET_SYSTEM = `Eres un sistema OCR especializado en tickets de tiendas de moda.
 Extrae toda la información visible con máxima precisión.
-REGLAS: No inventes. Si un dato no se ve claramente, baja la confianza.
+REGLAS:
+- No inventes. Si un dato no se ve claramente, baja la confianza.
+- El campo "cat" DEBE estar en español y ser uno de: ${CATS_DETAIL.join(', ')}. Traduce: T-SHIRT→Camiseta manga corta, PANTS/TROUSERS→Pantalón vestir, JEANS→Vaquero, SHIRT→Camisa Oxford, SWEATER/KNIT→Jersey, HOODIE→Hoodie, JACKET→Bomber, COAT→Abrigo, SHOES→Sneakers, etc.
+- El campo "sku" es el número de referencia/artículo del producto si aparece en el ticket.
 Responde SOLO con JSON válido:
 {
   "store": "string",
@@ -341,7 +344,13 @@ function renderFicha(){
       <input id="docfile" type="file" accept="image/*,application/pdf" hidden/>
       <div style="height:14px"></div>
       <button class="btn ${onSale?'ghost':'dark'}" id="sale" style="margin-bottom:10px">${svg('tag',18)} ${onSale?'Quitar de la venta':'Poner en venta · sugerido '+Math.round(g.price*0.4)+' €'}</button>
-      <button class="btn ghost" id="wear">${svg('check',18)} Marcar como usada hoy</button>
+      ${onSale?`<div class="sell-box">
+        <div class="sell-title">${svg('tag',16)} Publicar anuncio</div>
+        <div class="sub" style="margin:4px 0 10px">Drobe prepara el anuncio (título, descripción y precio). Tú das un toque para publicar en la app.</div>
+        <button class="btn ghost sell-btn" id="sell_wallapop" style="margin-bottom:8px">Preparar para Wallapop</button>
+        <button class="btn ghost sell-btn" id="sell_vinted">Preparar para Vinted</button>
+      </div>`:''}
+      <button class="btn ghost" id="wear" style="margin-top:10px">${svg('check',18)} Marcar como usada hoy</button>
     </div>`;
   document.body.appendChild(el);
   el.querySelector('#fclose').onclick=closeFicha;
@@ -351,6 +360,8 @@ function renderFicha(){
   el.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>openFicha(b.dataset.c));
   el.querySelector('#sale').onclick=()=>{ g.status=onSale?'uso':'venta'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
   el.querySelector('#wear').onclick=()=>{ g.worn++; g.lastWorn='Hoy'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
+  if(el.querySelector('#sell_wallapop'))el.querySelector('#sell_wallapop').onclick=()=>prepararVenta(g,'wallapop');
+  if(el.querySelector('#sell_vinted'))el.querySelector('#sell_vinted').onclick=()=>prepararVenta(g,'vinted');
   el.querySelector('#docfile').addEventListener('change',ev=>{
     const f=ev.target.files&&ev.target.files[0]; if(!f)return;
     const pdf=/pdf/i.test(f.type);
@@ -360,6 +371,49 @@ function renderFicha(){
   });
 }
 const spec=(l,v,eco)=>`<div class="spec"><div class="l">${l}</div><div class="v${eco?' eco':''}">${v}</div></div>`;
+
+async function prepararVenta(g,plataforma){
+  const el=document.createElement('div'); el.className='ficha'; el.id='sellprep';
+  const precioSugerido=Math.round(g.price*0.4);
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="sb">${svg('back',20)}</button><span class="t">Anuncio para ${plataforma==='wallapop'?'Wallapop':'Vinted'}</span></div>
+    <div class="scanimg" style="margin-bottom:14px"><img src="${g.img||''}"/></div>
+    <div id="sell_out"><div class="empty">${svg('load',24)}<div style="margin-top:10px">Generando anuncio…</div></div></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('.empty svg')?.classList.add('spin');
+  el.querySelector('#sb').onclick=()=>el.remove();
+
+  const sys=`Eres un experto en vender ropa de segunda mano en ${plataforma}. Genera un anuncio atractivo y honesto.
+Devuelve SOLO JSON: {"titulo":"título corto y atractivo, max 50 caracteres","descripcion":"descripción de 3-4 frases: estado, detalles, por qué venderla","precio_sugerido":número en euros,"hashtags":["tag1","tag2","tag3"]}.`;
+  const usr=`Prenda: ${g.brand} ${g.name}, tipo ${g.cat}, color ${g.color}, talla ${g.size||'?'}, material ${g.material||'?'}, estado ${g.cond}. Precio original ${g.price}€, usada ${g.worn} veces. Precio de reventa orientativo: ${precioSugerido}€.`;
+  const r=await callAI(sys,usr);
+
+  const out=el.querySelector('#sell_out');
+  const titulo=r?.titulo||`${g.brand} ${g.name} talla ${g.size||''}`.trim();
+  const precio=r?.precio_sugerido||precioSugerido;
+  const desc=r?.descripcion||`${g.brand} ${g.name} en ${g.cond.toLowerCase()}. Talla ${g.size||'—'}, color ${g.color}. ${g.material?'Material: '+g.material+'. ':''}Usada ${g.worn} veces.`;
+  const tags=(r?.hashtags||[g.brand,g.cat,g.color]).filter(Boolean);
+  const textoCompleto=`${titulo}\n\n${desc}\n\nPrecio: ${precio}€\n${tags.map(t=>'#'+t.replace(/\s+/g,'')).join(' ')}`;
+
+  out.innerHTML=`
+    <div class="field"><label>Título</label><input id="s_titulo" value="${esc(titulo)}"/></div>
+    <div class="field"><label>Precio €</label><input id="s_precio" inputmode="decimal" value="${precio}"/></div>
+    <div class="field"><label>Descripción</label><textarea id="s_desc" rows="5" style="width:100%;font:inherit;padding:12px;border:1px solid var(--hair);border-radius:12px;background:var(--surface);resize:vertical">${esc(desc)}</textarea></div>
+    <div class="chips" style="flex-wrap:wrap;margin-bottom:14px">${tags.map(t=>`<span class="chip on">#${t.replace(/\s+/g,'')}</span>`).join('')}</div>
+    <button class="btn dark" id="s_copy" style="margin-bottom:10px">${svg('file',18)} Copiar anuncio</button>
+    <button class="btn dark" id="s_open">${svg('chev',18)} Abrir ${plataforma==='wallapop'?'Wallapop':'Vinted'}</button>
+    <div class="note" style="margin-top:14px">${svg('spark',18)}<span>Wallapop y Vinted no permiten publicar automáticamente desde fuera. Drobe te prepara todo: copia el anuncio, abre la app y pégalo. Un solo toque.</span></div>`;
+
+  out.querySelector('#s_copy').onclick=function(){
+    const t=`${out.querySelector('#s_titulo').value}\n\n${out.querySelector('#s_desc').value}\n\nPrecio: ${out.querySelector('#s_precio').value}€\n${tags.map(x=>'#'+x.replace(/\s+/g,'')).join(' ')}`;
+    navigator.clipboard?.writeText(t).then(()=>{ this.innerHTML=`${svg('check',18)} ¡Copiado!`; setTimeout(()=>{this.innerHTML=`${svg('file',18)} Copiar anuncio`;},1500); });
+  };
+  out.querySelector('#s_open').onclick=()=>{
+    const url=plataforma==='wallapop'?'https://es.wallapop.com/app/catalog/upload':'https://www.vinted.es/items/new';
+    window.open(url,'_blank','noopener');
+  };
+}
 function editGarment(g){
   const el=document.createElement('div'); el.className='ficha'; el.id='edit';
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
@@ -463,19 +517,44 @@ function showPrenda(m,r,img){
 
 function showTicket(m,r,img){
   if(!r||!r.items?.length)r={store:'Tienda',date:'Hoy',items:[{name:'Prenda detectada',brand:'',price:0,cat:'Camiseta manga corta',confidence:.5}]};
+  // normalizar categorías a español
+  r.items.forEach(it=>{ it.cat=normalizeCat(it.cat); });
   const doc={type:'Ticket',icon:'receipt',name:`Ticket ${r.store||''}.jpg`,dt:r.date||'Hoy',url:img.dataUrl};
   const stage=m.querySelector('#stage');
   stage.innerHTML=`
     <div class="note" style="margin-bottom:14px">${svg('receipt',18)}<span><b>${r.store||'Ticket'}</b>${r.date?' · '+r.date:''} · ${r.items.length} prenda(s) · ${r.total?r.total+'€':''}. Todas quedan enlazadas al ticket original.</span></div>
     ${r.items.map((it,i)=>{const low=(it.confidence||1)<0.75;return `<div class="conf${low?' low':''}" style="animation-delay:${i*0.07}s">
       <span class="k">${it.brand||'Prenda'}</span>
-      <span class="vv">${it.name} · ${it.price||0} €</span>
+      <span class="vv">${it.cat} · ${it.price||0} €</span>
       ${stars(it.confidence||0.5)} ${confBadge(it.confidence||0.5)}</div>`;}).join('')}
     <button class="btn dark" id="conf" style="margin-top:14px">${svg('add',18,2)} Añadir ${r.items.length} al armario</button>`;
   stage.querySelector('#conf').onclick=()=>{
-    r.items.forEach(it=>addGarment({brand:it.brand||'—',name:it.name,cat:it.cat||'Camiseta manga corta',catGroup:catToGroup(it.cat),fit:'Regular Fit',color:'—',colors:['—'],material:'',size:'',season:'Todo el año',formality:'Casual',bought:r.date||'Hoy',store:r.store||'',price:it.price||0,cond:'Nuevo con etiqueta',worn:0,lastWorn:'—',status:'uso',img:'./assets/silbon-raquetas-white.png',photos:[],docs:[{...doc}],tags:[]}));
+    r.items.forEach(it=>addGarment({brand:it.brand||'—',name:it.name||it.cat,cat:it.cat,catGroup:catToGroup(it.cat),fit:'Regular Fit',color:'—',colors:['—'],material:'',size:'',season:'Todo el año',formality:'Casual',bought:r.date||'Hoy',store:r.store||'',price:it.price||0,cond:'Nuevo con etiqueta',worn:0,lastWorn:'—',status:'uso',img:'./assets/silbon-raquetas-white.png',photos:[],docs:[{...doc}],tags:[],sku:it.sku||''}));
     addMode='choose'; go('armario');
   };
+}
+
+function normalizeCat(cat=''){
+  const c=cat.toLowerCase().trim();
+  const map={
+    't-shirt':'Camiseta manga corta','tshirt':'Camiseta manga corta','tee':'Camiseta manga corta',
+    'long sleeve':'Camiseta manga larga','polo':'Polo','top':'Top',
+    'pants':'Pantalón vestir','trousers':'Pantalón vestir','pant':'Pantalón vestir',
+    'jeans':'Vaquero','denim':'Vaquero','chino':'Chino','chinos':'Chino',
+    'cargo':'Cargo','jogger':'Jogger','joggers':'Jogger','shorts':'Shorts','short':'Shorts',
+    'shirt':'Camisa Oxford','sweater':'Jersey','jumper':'Jersey','knit':'Jersey','knitwear':'Jersey',
+    'sweatshirt':'Sudadera','hoodie':'Hoodie','blazer':'Blazer','jacket':'Bomber',
+    'coat':'Abrigo','parka':'Parka','puffer':'Plumífero','overcoat':'Abrigo',
+    'shoes':'Sneakers','sneakers':'Sneakers','trainers':'Sneakers','boots':'Botas',
+    'dress':'Vestido','skirt':'Falda','bag':'Bolso','backpack':'Mochila','cap':'Gorra','belt':'Cinturón'
+  };
+  if(map[c])return map[c];
+  // si ya está en español o es una de nuestras cats, dejarlo
+  const exact=CATS_DETAIL.find(x=>x.toLowerCase()===c);
+  if(exact)return exact;
+  // buscar coincidencia parcial con nuestras categorías
+  const partial=CATS_DETAIL.find(x=>x.toLowerCase().includes(c)||c.includes(x.toLowerCase()));
+  return partial||cat||'Otro';
 }
 
 function catToGroup(cat=''){
@@ -571,19 +650,28 @@ function buildCalendar(el){
   });
 }
 
-async function suggestDest(q,sugg,el){
+let _destTimer=null;
+function suggestDest(q,sugg,el){
+  clearTimeout(_destTimer);
   if(!q||q.length<2){sugg.innerHTML='';return;}
-  try{
-    const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=4&accept-language=es`;
-    const r=await fetch(url,{headers:{'User-Agent':'Drobe/1.0'}});
-    const data=await r.json();
-    sugg.innerHTML=data.slice(0,4).map(p=>`<div class="sugg-item" data-lat="${p.lat}" data-lon="${p.lon}" data-name="${esc(p.display_name.split(',').slice(0,2).join(', '))}">${p.display_name.split(',').slice(0,2).join(', ')}</div>`).join('');
-    sugg.querySelectorAll('.sugg-item').forEach(item=>item.onclick=()=>{
-      trip.lat=parseFloat(item.dataset.lat);trip.lon=parseFloat(item.dataset.lon);
-      const dest=item.dataset.name; trip.dest=dest;
-      el.querySelector('#dest').value=dest; sugg.innerHTML='';
-    });
-  }catch(e){sugg.innerHTML='';}
+  _destTimer=setTimeout(async()=>{
+    try{
+      const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=es`;
+      const r=await fetch(url); // sin User-Agent: el navegador lo bloquea
+      if(!r.ok)throw 0;
+      const data=await r.json();
+      if(!data||!data.length){sugg.innerHTML='';return;}
+      sugg.innerHTML=data.slice(0,5).map(p=>{
+        const name=p.display_name.split(',').slice(0,2).join(', ');
+        return `<div class="sugg-item" data-lat="${p.lat}" data-lon="${p.lon}" data-name="${esc(name)}">${svg('plane',15)} ${name}</div>`;
+      }).join('');
+      sugg.querySelectorAll('.sugg-item').forEach(item=>item.onclick=()=>{
+        trip.lat=parseFloat(item.dataset.lat);trip.lon=parseFloat(item.dataset.lon);
+        trip.dest=item.dataset.name;
+        el.querySelector('#dest').value=item.dataset.name; sugg.innerHTML='';
+      });
+    }catch(e){sugg.innerHTML='';}
+  },350);
 }
 
 async function maletaStep2(el){
@@ -1093,10 +1181,91 @@ function renderAuth(slot){
 }
 
 /* ═══════════════════════════════════════════
+   BIENVENIDA / ONBOARDING
+═══════════════════════════════════════════ */
+function needsWelcome(){
+  // mostrar si nunca se ha visto Y no hay sesión activa
+  try{ return !localStorage.getItem('drobe.seen') && !session; }catch(e){ return false; }
+}
+function markSeen(){ try{localStorage.setItem('drobe.seen','1');}catch(e){} }
+
+function renderWelcome(mode='intro'){
+  const el=document.createElement('div'); el.className='ficha'; el.id='welcome'; el.style.background='var(--bg)';
+  if(mode==='intro'){
+    el.innerHTML=`<div class="welcome">
+      <div class="welcome-top">
+        <div class="word" style="font-size:38px">Dro<b>be</b></div>
+        <div class="welcome-tag">Tu armario, allá donde vayas.</div>
+      </div>
+      <div class="welcome-feats">
+        ${[['cam','Digitaliza tu ropa con una foto'],['spark','Asesor de compra honesto'],['plane','Prepara la maleta con IA'],['tag','Vende lo que no usas']].map(f=>`<div class="wfeat">${svg(f[0],20)}<span>${f[1]}</span></div>`).join('')}
+      </div>
+      <div class="welcome-actions">
+        <button class="btn dark" id="w_signup">Crear cuenta</button>
+        <button class="btn ghost" id="w_login">Ya tengo cuenta</button>
+        <button class="btn text" id="w_skip">Probar sin cuenta</button>
+      </div>
+    </div>`;
+    document.body.appendChild(el);
+    el.querySelector('#w_signup').onclick=()=>{el.remove();renderWelcome('signup');};
+    el.querySelector('#w_login').onclick=()=>{el.remove();renderWelcome('login');};
+    el.querySelector('#w_skip').onclick=()=>{markSeen();el.remove();};
+    return;
+  }
+  // login / signup
+  const isSignup=mode==='signup';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 30px)">
+    <div class="backbar"><button id="wb">${svg('back',20)}</button><span class="t">${isSignup?'Crear cuenta':'Iniciar sesión'}</span></div>
+    <div class="word" style="font-size:30px;margin:10px 0 6px">Dro<b>be</b></div>
+    <div class="sub" style="margin-bottom:20px">${isSignup?'Crea tu cuenta para sincronizar tu armario en todos tus dispositivos.':'Entra para recuperar tu armario.'}</div>
+    ${!cloud.cloudEnabled()?`<div class="note warn">${svg('spark',18)}<span>Sincronización no configurada (falta Supabase). Puedes usar la app en local.</span></div>`:''}
+    <div class="field"><label>Email</label><input id="w_em" type="email" placeholder="tu@email.com"/></div>
+    <div class="field"><label>Contraseña</label><input id="w_pw" type="password" placeholder="Mínimo 6 caracteres"/></div>
+    ${isSignup?`<div class="row2">
+      <div class="field"><label>Nombre (opcional)</label><input id="w_name" placeholder="Pepe"/></div>
+      <div class="field"><label>Edad (opcional)</label><input id="w_age" inputmode="numeric" placeholder="25"/></div>
+    </div>
+    <div class="field"><label>Sexo (opcional)</label>
+      <div class="chips" id="w_sex">${['Hombre','Mujer','Otro','Prefiero no decir'].map(s=>`<button class="chip" data-sex="${s}">${s}</button>`).join('')}</div></div>`:''}
+    <div id="w_msg"></div>
+    <button class="btn dark" id="w_go" style="margin-top:6px">${isSignup?'Crear cuenta':'Entrar'}</button>
+    <button class="btn text" id="w_skip2" style="margin-top:4px">Continuar sin cuenta</button>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#wb').onclick=()=>{el.remove();renderWelcome('intro');};
+  el.querySelector('#w_skip2').onclick=()=>{markSeen();el.remove();};
+  let sex='';
+  el.querySelectorAll('[data-sex]').forEach(b=>b.onclick=()=>{sex=b.dataset.sex;el.querySelectorAll('[data-sex]').forEach(x=>x.classList.toggle('on',x===b));});
+  el.querySelector('#w_go').onclick=async function(){
+    const em=el.querySelector('#w_em').value.trim(), pw=el.querySelector('#w_pw').value;
+    const msg=el.querySelector('#w_msg');
+    if(!em||!pw){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">Introduce email y contraseña.</div>`;return;}
+    if(pw.length<6){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">La contraseña debe tener al menos 6 caracteres.</div>`;return;}
+    if(!cloud.cloudEnabled()){ markSeen(); el.remove(); return; }
+    this.disabled=true; this.textContent='Conectando…';
+    try{
+      const s=await cloud.signInOrUp(em,pw);
+      if(s){
+        session=s;
+        if(isSignup){ store.profile=store.profile||{}; store.profile.name=el.querySelector('#w_name')?.value||''; store.profile.age=el.querySelector('#w_age')?.value||''; store.profile.sex=sex; save(); }
+        await syncFromCloud(); markSeen(); el.remove(); render();
+      } else {
+        msg.innerHTML=`<div class="sub" style="margin-bottom:8px">Revisa tu email para confirmar la cuenta, luego inicia sesión.</div>`;
+        this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
+      }
+    }catch(e){
+      msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">${e?.message||'No se pudo conectar.'}</div>`;
+      this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
+    }
+  };
+}
+
+/* ═══════════════════════════════════════════
    CLOUD + ARRANQUE
 ═══════════════════════════════════════════ */
 render();
 initCloud();
+if(needsWelcome())renderWelcome('intro');
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 
 async function initCloud(){
