@@ -246,18 +246,36 @@ function readForm(scope){
    IA — RECONOCIMIENTO
 ═══════════════════════════════════════════ */
 async function imageToBase64(file,maxDim=1400){
+  // 1) Intento moderno: createImageBitmap maneja HEIC y orientación EXIF en iOS
+  try{
+    if(window.createImageBitmap){
+      const bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}).catch(()=>createImageBitmap(file));
+      const sc=Math.min(1,maxDim/Math.max(bitmap.width,bitmap.height));
+      const w=Math.max(1,Math.round(bitmap.width*sc)),h=Math.max(1,Math.round(bitmap.height*sc));
+      const c=document.createElement('canvas'); c.width=w; c.height=h;
+      c.getContext('2d').drawImage(bitmap,0,0,w,h);
+      bitmap.close&&bitmap.close();
+      const dataUrl=c.toDataURL('image/jpeg',0.85);
+      return {media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h};
+    }
+  }catch(e){ /* cae al método clásico */ }
+  // 2) Fallback clásico con <img>
   return new Promise((res,rej)=>{
     const url=URL.createObjectURL(file),im=new Image();
+    const to=setTimeout(()=>{ URL.revokeObjectURL(url); rej(new Error('La imagen tardó demasiado en cargar.')); },15000);
     im.onload=()=>{
-      URL.revokeObjectURL(url);
-      const sc=Math.min(1,maxDim/Math.max(im.width,im.height));
-      const w=Math.round(im.width*sc),h=Math.round(im.height*sc);
-      const c=document.createElement('canvas'); c.width=w; c.height=h;
-      c.getContext('2d').drawImage(im,0,0,w,h);
-      const dataUrl=c.toDataURL('image/jpeg',0.88);
-      res({media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h});
+      clearTimeout(to); URL.revokeObjectURL(url);
+      try{
+        const sc=Math.min(1,maxDim/Math.max(im.width,im.height));
+        const w=Math.max(1,Math.round(im.width*sc)),h=Math.max(1,Math.round(im.height*sc));
+        const c=document.createElement('canvas'); c.width=w; c.height=h;
+        c.getContext('2d').drawImage(im,0,0,w,h);
+        const dataUrl=c.toDataURL('image/jpeg',0.85);
+        res({media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h});
+      }catch(err){ rej(err); }
     };
-    im.onerror=rej; im.src=url;
+    im.onerror=()=>{ clearTimeout(to); URL.revokeObjectURL(url); rej(new Error('No se pudo leer la imagen (formato no compatible).')); };
+    im.src=url;
   });
 }
 async function callAI(system,user,image=null){
@@ -498,12 +516,12 @@ function vAdd(m){
         <span class="ring">${svg('cam',24)}</span>
         <div><div class="t1">Fotografiar prenda</div><div class="t2">Reconocimiento especializado en moda</div></div>
         <span class="arr">${svg('chev',20)}</span></label>
-      <input id="pf" type="file" accept="image/*" capture="environment" hidden/>
+      <input id="pf" type="file" accept="image/*" hidden/>
       <label class="opt alt reveal" for="tf" style="animation-delay:.1s">
         <span class="ring">${svg('scan',24)}</span>
         <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · ticket vinculado</div></div>
         <span class="arr">${svg('chev',20)}</span></label>
-      <input id="tf" type="file" accept="image/*" capture="environment" hidden/>
+      <input id="tf" type="file" accept="image/*" hidden/>
       <button class="opt alt reveal" id="manual" style="animation-delay:.15s">
         <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pen',24)}</span>
         <div><div class="t1">Añadir manualmente</div><div class="t2">Rellena los datos tú mismo</div></div>
@@ -515,8 +533,26 @@ function vAdd(m){
 }
 
 function handleScan(m,e,kind){
-  const f=e.target.files&&e.target.files[0]; if(!f)return;
-  imageToBase64(f).then(img=>runPipeline(m,img,kind));
+  const f=e.target.files&&e.target.files[0];
+  e.target.value=''; // permite volver a elegir la misma foto
+  if(!f)return;
+  // feedback inmediato: pantalla de carga antes de procesar la imagen
+  m.innerHTML=`
+    <div class="backbar"><button id="b0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Leyendo ticket':'Reconociendo prenda'}</span></div>
+    <div class="empty" style="padding-top:80px">${svg('load',30)}<div style="margin-top:14px">Preparando imagen…</div></div>`;
+  m.querySelector('#b0').onclick=()=>{addMode='choose';vAdd(m);};
+  imageToBase64(f)
+    .then(img=>runPipeline(m,img,kind))
+    .catch(err=>{
+      m.innerHTML=`
+        <div class="backbar"><button id="b1" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Ticket':'Prenda'}</span></div>
+        <div class="note warn" style="margin-top:14px">${svg('spark',18)}<span>No pude procesar esa foto: ${esc(err.message||'error')}. Prueba con otra foto o añade la prenda manualmente.</span></div>
+        <button class="btn dark" id="man" style="margin-top:14px">${svg('pen',18)} Añadir manualmente</button>
+        <button class="btn ghost" id="retry" style="margin-top:10px">Volver a intentar</button>`;
+      m.querySelector('#b1').onclick=()=>{addMode='choose';vAdd(m);};
+      m.querySelector('#man').onclick=()=>showPrenda(m,null,null);
+      m.querySelector('#retry').onclick=()=>{addMode='choose';vAdd(m);};
+    });
 }
 
 async function runPipeline(m,img,kind){
@@ -605,97 +641,135 @@ function catToGroup(cat=''){
    Dato B2B de máximo valor: intención de compra real
 ═══════════════════════════════════════════ */
 function openScannerTienda(){
-  const el=document.createElement('div'); el.className='ficha'; el.id='scanner';
-  el.style.zIndex='200';
+  const el=document.createElement('div'); el.className='ficha'; el.id='scanner'; el.style.zIndex='200';
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
     <div class="backbar"><button id="scb">${svg('back',20)}</button><span class="t">Estás en tienda</span></div>
-    <div class="note" style="margin-bottom:16px">${svg('store',18)}<span>Estás mirando algo. Dime qué es y Drobe te dice si ya lo tienes, cuál es tu talla y si el precio es bueno.</span></div>
-    <div class="field"><label>¿Qué estás mirando?</label><input id="sc_q" placeholder="Parka Stone Island verde, vaquero Levi's 501…" autofocus/></div>
+    <div class="note" style="margin-bottom:16px">${svg('store',18)}<span>Haz una foto de la prenda o descríbela. Drobe busca el mejor precio de esa marca <b>y alternativas más baratas que se le parezcan</b>.</span></div>
+    <label class="opt" for="sc_photo" style="margin-bottom:14px">
+      <span class="ring">${svg('cam',24)}</span>
+      <div><div class="t1">Foto de la prenda o etiqueta</div><div class="t2">Drobe la identifica automáticamente</div></div>
+      <span class="arr">${svg('chev',20)}</span></label>
+    <input id="sc_photo" type="file" accept="image/*" hidden/>
+    <div class="field"><label>O descríbela</label><input id="sc_q" placeholder="Pantalón lino azul marino Ecoalf…"/></div>
     <div class="row2">
-      <div class="field"><label>Marca</label><input id="sc_brand" placeholder="Stone Island"/></div>
+      <div class="field"><label>Marca</label><input id="sc_brand" placeholder="Ecoalf"/></div>
       <div class="field"><label>Precio que ves</label><input id="sc_price" inputmode="decimal" placeholder="120"/></div>
     </div>
-    <div class="field"><label>Tienda</label><input id="sc_store" placeholder="Zara, El Corte Inglés…"/></div>
-    <button class="btn dark" id="sc_go">${svg('target',18)} Analizar ahora</button>
+    <div class="field"><label>Tienda</label><input id="sc_store" placeholder="Ecoalf, El Corte Inglés…"/></div>
+    <button class="btn dark" id="sc_go">${svg('target',18)} Buscar mejor precio</button>
     <div id="sc_out" style="margin-top:16px"></div>
   </div>`;
   document.body.appendChild(el);
   el.querySelector('#scb').onclick=()=>el.remove();
+
+  // Foto → Groq vision rellena los campos
+  el.querySelector('#sc_photo').addEventListener('change',async ev=>{
+    const f=ev.target.files&&ev.target.files[0]; ev.target.value=''; if(!f)return;
+    const out=el.querySelector('#sc_out');
+    out.innerHTML=`<div class="empty" style="padding-top:20px">${svg('load',26)}<div style="margin-top:10px">Identificando la prenda…</div></div>`;
+    out.querySelector('svg')?.classList.add('spin');
+    try{
+      const img=await imageToBase64(f);
+      const r=await callAI(VISION_SYSTEM,'Identifica esta prenda con máxima precisión para buscarla en tiendas.',img);
+      if(r){
+        if(r.brand)el.querySelector('#sc_brand').value=r.brand;
+        const desc=[r.cat,r.color,r.material].filter(Boolean).join(' ');
+        el.querySelector('#sc_q').value=[r.brand,desc].filter(Boolean).join(' ');
+        out.innerHTML=`<div class="note"${''}>${svg('check',18)}<span>Detecté: <b>${[r.brand,r.cat,r.color].filter(Boolean).join(' ')||'prenda'}</b>. Revisa y pulsa "Buscar mejor precio".</span></div>`;
+      } else {
+        out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude identificarla. Descríbela a mano.</span></div>`;
+      }
+    }catch(e){
+      out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude procesar la foto. Descríbela a mano.</span></div>`;
+    }
+  });
+
   el.querySelector('#sc_go').onclick=async function(){
-    const q=el.querySelector('#sc_q').value.trim(); if(!q)return;
+    const q=el.querySelector('#sc_q').value.trim();
     const brand=el.querySelector('#sc_brand').value.trim();
+    if(!q&&!brand)return;
     const price=parseFloat(el.querySelector('#sc_price').value)||null;
     const storeName=el.querySelector('#sc_store').value.trim();
     const out=el.querySelector('#sc_out');
-    this.disabled=true; this.innerHTML=`${svg('load',18)} Analizando…`; this.querySelector('svg').classList.add('spin');
+    this.disabled=true; this.innerHTML=`${svg('load',18)} Buscando ofertas…`; this.querySelector('svg').classList.add('spin');
 
     const dna=computeStyleDNA();
-    const mySize=brand&&dna.sizeByBrand?.[brand]?`Tu talla en ${brand} es normalmente ${dna.sizeByBrand[brand]}.`:'';
-    // buscar duplicados en el armario
-    const similar=store.garments.filter(g=>g.status!=='venta'&&(q.toLowerCase().includes((g.cat||'').toLowerCase().split(' ')[0])||q.toLowerCase().includes((g.brand||'').toLowerCase())));
-    const dupAlert=similar.length?`Ya tienes ${similar.length} prenda(s) parecida(s): ${similar.map(g=>g.brand+' '+g.name).join(', ')}.`:'';
+    const mySize=brand&&dna.sizeByBrand?.[brand]?`Tu talla en ${brand} suele ser ${dna.sizeByBrand[brand]}.`:'';
+    const similar=store.garments.filter(g=>g.status!=='venta'&&(q.toLowerCase().includes((g.cat||'').toLowerCase().split(' ')[0])||(brand&&(g.brand||'').toLowerCase()===brand.toLowerCase())));
+    const dupAlert=similar.length?`Ya tienes: ${similar.map(g=>g.brand+' '+g.name).join(', ')}.`:'';
 
-    // análisis IA
-    const sys=`Eres el asesor de compra de Drobe. El usuario está físicamente en una tienda mirando una prenda. Sé directo y rápido. Devuelve SOLO JSON:
-{"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases muy directas","talla_recomendada":"","precio_ok":true|false,"precio_comentario":"","looks_nuevos":0}`;
-    const usr=`Armario del usuario: ${store.garments.map(g=>g.brand+' '+g.cat+' '+g.color).join(', ')}.
-${dupAlert}
-${mySize}
-Está en tienda mirando: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.
-ADN de estilo: ${dna.topFit||''}, colores ${dna.topColors?.map(c=>c.color).join('/')||''}, presupuesto medio ${dna.avgPrice||0}€.`;
+    // tipo de prenda sin marca, para buscar alternativas similares
+    const productType=q.replace(new RegExp(brand,'ig'),'').trim()||q;
 
-    const [r, offers]=await Promise.all([callAI(sys,usr), searchOffers(q+(brand?' '+brand:''))]);
+    const sys=`Eres el asesor de compra de Drobe. El usuario está en una tienda. Sé directo. Devuelve SOLO JSON:
+{"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases directas","precio_ok":true,"precio_comentario":"","looks_nuevos":0}`;
+    const usr=`Armario: ${store.garments.map(g=>g.brand+' '+g.cat+' '+g.color).join(', ')}.
+${dupAlert} ${mySize}
+Mira en tienda: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.
+Estilo: ${dna.topFit||''}, presupuesto medio ${dna.avgPrice||0}€.`;
 
-    // TRACKEAR el evento B2B
+    const [r, offers]=await Promise.all([
+      callAI(sys,usr),
+      searchOffersExtensive({query:q||brand,brand,productType,maxPrice:price})
+    ]);
+
     trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'analyzed',session_id:Date.now().toString(36)});
 
     let html='';
-    // duplicados alerta
-    if(similar.length){
-      html+=`<div class="note warn" style="margin-bottom:12px">${svg('spark',18)}<span><b>¡Ya tienes algo parecido!</b> ${dupAlert}</span></div>`;
-    }
-    // talla
-    if(mySize){
-      html+=`<div class="note" style="margin-bottom:12px">${svg('check',18)}<span>${mySize}</span></div>`;
-    }
-    // veredicto IA
+    if(similar.length) html+=`<div class="note warn" style="margin-bottom:12px">${svg('spark',18)}<span><b>¡Ojo!</b> ${dupAlert}</span></div>`;
+    if(mySize) html+=`<div class="note" style="margin-bottom:12px">${svg('check',18)}<span>${mySize}</span></div>`;
     if(r){
       const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
       const vt={comprar:'✓ Cómpralo',dudoso:'⚠ Piénsalo',evitar:'✗ Déjalo'}[r.veredicto]||'';
-      html+=`<div class="advisor">
-        <div class="who"><div class="av">D</div><div class="nm">Veredicto en tienda<span>En ${storeName||'tienda'}</span></div>
-          <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div>
+      html+=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Veredicto en tienda<span>${storeName||'tienda'}</span></div>
+        <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div>
         <div class="say" style="margin-top:8px">${r.razon||''}</div>
-        ${price&&r.precio_comentario?`<div class="sub" style="margin-top:6px">${r.precio_ok?'✓':'⚠'} ${r.precio_comentario}</div>`:''}
-        ${r.looks_nuevos?`<div class="sub" style="margin-top:4px">Crearía ~${r.looks_nuevos} looks nuevos con tu armario.</div>`:''}</div>`;
+        ${price&&r.precio_comentario?`<div class="sub" style="margin-top:6px">${r.precio_comentario}</div>`:''}</div>`;
     }
-    // ofertas (precio en otras tiendas)
-    if(offers&&offers.length){
-      html+=`<div class="shead"><h2>Precio en otras tiendas</h2></div>`+
-        offers.slice(0,3).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
-          <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:''}</div>
+
+    if(offers===null){
+      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Activa <b>SERPAPI_KEY</b> en Vercel para ver precios reales de tiendas.</span></div>`;
+    } else {
+      // MISMA MARCA — el mejor precio del mismo producto
+      if(offers.exact&&offers.exact.length){
+        const cheapest=offers.exact[0];
+        const saving=price&&cheapest.price_value?Math.round(price-cheapest.price_value):null;
+        html+=`<div class="shead"><h2>${brand||'Misma prenda'} · mejor precio</h2></div>`;
+        if(saving&&saving>0)html+=`<div class="save-banner">${svg('tag',18)} La encuentras <b>${saving}€ más barata</b> que en ${storeName||'la tienda'}</div>`;
+        html+=offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener">
+          <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+          <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div>
+          <div class="offer-p">${o.price||''}</div></a>`).join('');
+      }
+      // ALTERNATIVAS más baratas y parecidas de otras marcas
+      if(offers.alternatives&&offers.alternatives.length){
+        html+=`<div class="shead"><h2>Alternativas parecidas más baratas</h2></div>
+          <div class="sub" style="margin:-4px 0 10px">Otras marcas con prendas similares a mejor precio.</div>`;
+        html+=offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
+          <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
           <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
           <div class="offer-p">${o.price||''}</div></a>`).join('');
+      }
+      if((!offers.exact||!offers.exact.length)&&(!offers.alternatives||!offers.alternatives.length)){
+        html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>No encontré ofertas. Prueba con marca + tipo de prenda.</span></div>`;
+      }
     }
-    // acciones
-    html+=`<div style="display:flex;gap:10px;margin-top:14px">
+
+    html+=`<div style="display:flex;gap:10px;margin-top:16px">
       <button class="btn dark" id="sc_buy" style="flex:1">${svg('add',16)} Lo compro</button>
       <button class="btn ghost" id="sc_no" style="flex:1">Lo dejo</button>
     </div>`;
     out.innerHTML=html;
     out.querySelector('#sc_buy').onclick=()=>{
       trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'bought'});
-      el.remove();
-      // abrir formulario de añadir con datos prellenados
-      go('add');
+      el.remove(); go('add');
       setTimeout(()=>showPrenda(document.getElementById('main'),{brand,name:q,price},null),100);
     };
     out.querySelector('#sc_no').onclick=()=>{
-      const reason=r?.veredicto==='evitar'?'ai_advised_against':similar.length?'already_have':'user_choice';
-      trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'rejected',rejection_reason:reason});
+      trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'rejected',rejection_reason:similar.length?'already_have':'user_choice'});
       el.remove();
     };
-    this.disabled=false; this.innerHTML=`${svg('target',18)} Analizar otra`;
+    this.disabled=false; this.innerHTML=`${svg('target',18)} Buscar otra`;
   };
 }
 
@@ -956,6 +1030,14 @@ async function searchOffers(query){
   try{
     const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query})});
     const d=await r.json(); return d&&d.available?d.results||[]:null;
+  }catch(e){ return null; }
+}
+async function searchOffersExtensive({query,brand,productType,maxPrice}){
+  try{
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice})});
+    const d=await r.json();
+    if(!d||!d.available)return null;
+    return {exact:d.exact||[],alternatives:d.alternatives||[]};
   }catch(e){ return null; }
 }
 function openAsesorCompra(){ const el=document.createElement('div'); el.className='ficha'; el.id='asesor'; renderAsesorForm(el); document.body.appendChild(el); }
