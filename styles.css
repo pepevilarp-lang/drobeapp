@@ -184,3 +184,24 @@ main{flex:1;padding:0 22px 120px}
 .ficha-edit{position:absolute;top:calc(env(safe-area-inset-top) + 12px);right:16px;width:38px;height:38px;border-radius:999px;background:rgba(255,255,255,.85);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;box-shadow:var(--s1);z-index:2;color:var(--ink)}
 .scanimg{width:120px;height:150px;border-radius:14px;overflow:hidden;background:var(--surface-2);box-shadow:var(--s1);margin:0 auto 16px}
 .scanimg img{width:100%;height:100%;object-fit:cover;object-position:center top}
+
+/* maleta + perfil */
+.stepper{display:inline-flex;align-items:center;gap:0;border:1px solid var(--hair);border-radius:12px;overflow:hidden;background:var(--surface)}
+.stepper button{width:42px;height:42px;font-size:20px;color:var(--ink)}
+.stepper .val{min-width:54px;text-align:center;font-weight:700;font-size:16px}
+.suitcase{margin:18px 0;border-radius:20px;background:linear-gradient(180deg,#2c313b 0%,#1d212a 100%);padding:14px;box-shadow:var(--s3);position:relative}
+.suitcase .handle{width:54px;height:8px;border-radius:999px;background:rgba(255,255,255,.25);margin:0 auto 12px}
+.case-body{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;min-height:150px}
+.packtile{aspect-ratio:3/4;border-radius:11px;overflow:hidden;background:#3a3f4a;box-shadow:0 8px 16px -8px rgba(0,0,0,.6);opacity:0;transform:translateY(-28px) rotate(-7deg) scale(.82);animation:pack .55s var(--ease) forwards}
+.packtile img{width:100%;height:100%;object-fit:cover;object-position:center top}
+@keyframes pack{60%{opacity:1;transform:translateY(4px) rotate(2deg) scale(1.03)}100%{opacity:1;transform:none}}
+.capbar{height:10px;border-radius:999px;background:var(--hair-2);overflow:hidden;margin-top:8px}
+.capbar i{display:block;height:100%;background:var(--ink)}
+.chk{display:flex;gap:10px;align-items:flex-start;padding:9px 0;font-size:14px;color:var(--ink2)}
+.chk .ic{color:var(--eco);flex:none;margin-top:1px}
+.chk.warn .ic{color:var(--amber)}
+.sizerow{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--hair-2)}
+.sizerow .bn{font-size:14px;font-weight:600;letter-spacing:-.01em}
+.sizerow .sz{font-size:14px;font-weight:700;color:var(--ink);background:var(--surface);border:1px solid var(--hair);border-radius:8px;padding:3px 12px}
+.measure{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.swatch{width:16px;height:16px;border-radius:5px;border:1px solid rgba(0,0,0,.08);display:inline-block;vertical-align:-3px;margin-right:6px}
