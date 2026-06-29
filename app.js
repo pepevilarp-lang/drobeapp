@@ -1,4 +1,17 @@
 import { mountWardrobe3D, unmountWardrobe3D, resetView } from './wardrobe3d.js';
+
+/* Manejo de errores visible en móvil (si la app no llega a renderizar) */
+window.addEventListener('error',e=>{
+  const app=document.getElementById('app');
+  if(app&&!app.querySelector('.shell')){
+    app.innerHTML='<div style="padding:40px 24px;font-family:system-ui">'+
+      '<div style="font-size:24px;font-weight:800;margin-bottom:12px">Dro<span style="color:#3B6CF6">be</span></div>'+
+      '<div style="font-size:15px;color:#555;line-height:1.5">Algo no cargó bien. Detalle:</div>'+
+      '<pre style="font-size:12px;background:#f4f4f4;padding:12px;border-radius:8px;margin-top:10px;white-space:pre-wrap;word-break:break-word">'+((e.message||'error')+'\n'+(e.filename||'')+':'+(e.lineno||''))+'</pre>'+
+      '<button onclick="location.reload()" style="margin-top:16px;background:#15161B;color:#fff;border:none;border-radius:12px;padding:14px 20px;font-size:15px;font-weight:600;width:100%">Reintentar</button>'+
+      '</div>';
+  }
+});
 import * as cloud from './lib/supabase.js';
 
 let session = null;
@@ -269,7 +282,8 @@ Responde SOLO JSON: {"store":"","date":"","total":0,"items":[{"name":"","brand":
 /* ═══════════════════════════════════════════
    ROUTER
 ═══════════════════════════════════════════ */
-let route='armario', wardMode='3d', gridFilter='Todo', fichaId=null;
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', fichaId=null;
 const app=document.getElementById('app');
 const TABS=[
   {k:'armario',i:'shirt',l:'Armario'},
