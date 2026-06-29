@@ -21,9 +21,13 @@ module.exports = async function handler(req, res) {
       const url = 'https://serpapi.com/search.json?engine=google_shopping&q=' + encodeURIComponent(q) + '&gl=' + country + '&hl=es&num=20&api_key=' + key;
       const r = await fetch(url);
       const data = await r.json();
+      if (data && data.error) { console.error('[shopping] SerpApi error:', data.error); lastError = data.error; }
+      const n = (data && data.shopping_results) ? data.shopping_results.length : 0;
+      console.log('[shopping] query:', q, '| results:', n, '| status:', r.status);
       return (data && data.shopping_results) || [];
-    } catch(e) { return []; }
+    } catch(e) { console.error('[shopping] fetch fail:', e.message); lastError = e.message; return []; }
   }
+  let lastError = null;
 
   function mapItem(p) {
     return {
@@ -85,7 +89,8 @@ module.exports = async function handler(req, res) {
       available: true,
       exact: exact.slice(0, 5),
       alternatives: alternatives.slice(0, 5),
-      results: exact.slice(0, 5)
+      results: exact.slice(0, 5),
+      debug: { serpapi_error: lastError, exact_found: exact.length, alt_found: alternatives.length }
     });
   } catch(e) {
     res.status(200).json({ available: false, reason: e.message });
