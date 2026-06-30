@@ -54,6 +54,11 @@ export async function signOut() { const c = await client(); if (c) await c.auth.
 /* ---- mapping JS <-> columnas ---- */
 const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 function toRow(g) {
+  let daysSince=null;
+  if(g.lastWornAt){
+    const ms=Date.now()-new Date(g.lastWornAt).getTime();
+    if(!isNaN(ms)) daysSince=Math.max(0,Math.round(ms/86400000));
+  }
   return {
     id: g.id,
     brand: g.brand || null, name: g.name || 'Prenda',
@@ -65,16 +70,22 @@ function toRow(g) {
     price: Number(g.price) || 0, store: g.store || null,
     bought_at: g.bought || null, cond: g.cond || null,
     worn: g.worn || 0, last_worn: g.lastWorn || null,
+    days_since_last_use: daysSince,
     status: g.status || 'uso', img: g.img || null, sku: g.sku || null
   };
 }
 export function fromRow(r) {
+  let lastWornAt=null;
+  if(typeof r.days_since_last_use==='number'){
+    lastWornAt=new Date(Date.now()-r.days_since_last_use*86400000).toISOString();
+  }
   return {
     id: r.id, brand: r.brand, name: r.name, cat: r.cat, catGroup: r.cat_group,
     fit: r.fit, color: r.color, colors: r.colors || (r.color ? [r.color] : []),
     material: r.material, size: r.size, season: r.season, formality: r.formality,
     price: Number(r.price) || 0, store: r.store, bought: r.bought_at, cond: r.cond,
-    worn: r.worn || 0, lastWorn: r.last_worn, status: r.status, img: r.img, sku: r.sku,
+    worn: r.worn || 0, lastWorn: r.last_worn, lastWornAt,
+    status: r.status, img: r.img, sku: r.sku,
     photos: [], docs: [], tags: []
   };
 }
@@ -87,13 +98,14 @@ export async function pullGarments() {
   return data;
 }
 export async function pushGarment(g, forceInsert = false) {
-  const c = await client(); if (!c) return;
+  const c = await client(); if (!c) return { ok:false, reason:'no_client' };
   const { data: { user } } = await c.auth.getUser();
-  if (!user) return;
+  if (!user) return { ok:false, reason:'no_session' };
   const row = { ...toRow(g), user_id: user.id };
   // la columna id es text sin default: SIEMPRE hay que enviar el id
   const { error } = await c.from('garments').upsert(row, { onConflict: 'id' });
-  if (error) console.warn('push', error);
+  if (error) { console.warn('push', error); return { ok:false, reason:error.message }; }
+  return { ok:true };
 }
 export async function deleteGarmentCloud(id) {
   const c = await client(); if (!c || !id) return;
@@ -106,6 +118,15 @@ export async function fetchMarketplace() {
 }
 
 // B2B enrichment methods
+
+export async function pullProfile() {
+  const c = await client(); if (!c) return null;
+  const { data: { user } } = await c.auth.getUser();
+  if (!user) return null;
+  const { data, error } = await c.from('profiles').select('*').eq('id', user.id).maybeSingle();
+  if (error) { console.warn('pullProfile', error); return null; }
+  return data;
+}
 
 export async function updateProfile(data) {
   const c = await client(); if (!c) return;
