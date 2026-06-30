@@ -119,6 +119,38 @@ export async function fetchMarketplace() {
 
 // B2B enrichment methods
 
+export async function diagnose() {
+  const out = { steps: [] };
+  const c = await client();
+  if (!c) { out.steps.push('Sin cliente Supabase (no configurado)'); return out; }
+  out.steps.push('Cliente Supabase OK');
+  const { data: { user }, error: uErr } = await c.auth.getUser();
+  if (uErr) { out.steps.push('Error getUser: ' + uErr.message); return out; }
+  if (!user) { out.steps.push('NO hay sesión activa (user=null)'); return out; }
+  out.steps.push('Sesión activa: ' + user.email);
+  out.userId = user.id;
+  // probar lectura
+  const { data: rd, error: rErr } = await c.from('garments').select('id').limit(1);
+  if (rErr) { out.steps.push('LECTURA falla: ' + rErr.message + (rErr.code?' ['+rErr.code+']':'')); return out; }
+  out.steps.push('Lectura OK (' + (rd?rd.length:0) + ' filas visibles)');
+  // probar escritura de una prenda de prueba
+  const testId = 'diag-' + Date.now();
+  const { error: wErr } = await c.from('garments').upsert({
+    id: testId, user_id: user.id, brand: 'TEST', name: 'Diagnóstico',
+    cat: 'Camiseta manga corta', price: 0, status: 'uso'
+  }, { onConflict: 'id' });
+  if (wErr) { out.steps.push('ESCRITURA falla: ' + wErr.message + (wErr.code?' ['+wErr.code+']':'')); return out; }
+  out.steps.push('Escritura OK');
+  // confirmar que se puede leer lo escrito
+  const { data: back, error: bErr } = await c.from('garments').select('*').eq('id', testId).maybeSingle();
+  if (bErr) { out.steps.push('Relectura falla: ' + bErr.message); }
+  else if (back) { out.steps.push('Confirmado: la prenda de prueba se guardó y se recuperó'); out.ok = true; }
+  else out.steps.push('La prenda se escribió pero NO se recupera (posible RLS de SELECT)');
+  // limpiar
+  await c.from('garments').delete().eq('id', testId);
+  return out;
+}
+
 export async function pullProfile() {
   const c = await client(); if (!c) return null;
   const { data: { user } } = await c.auth.getUser();
@@ -133,6 +165,29 @@ export async function updateProfile(data) {
   const { data: { user } } = await c.auth.getUser();
   if (!user) return;
   await c.from('profiles').upsert({ id: user.id, email: user.email, ...data, updated_at: new Date().toISOString() });
+}
+
+export async function saveMaletaCloud(mal) {
+  const c = await client(); if (!c) return { ok:false, reason:'no_client' };
+  const { data: { user } } = await c.auth.getUser();
+  if (!user) return { ok:false, reason:'no_session' };
+  const { error } = await c.from('maletas').upsert({
+    id: mal.id, user_id: user.id, name: mal.name, dest: mal.dest || null,
+    days: mal.days || null, plan: mal.plan || null, items: mal.items || [],
+    looks: mal.looks || null, weight: mal.weight || null, created_at: mal.createdAt
+  }, { onConflict: 'id' });
+  if (error) { console.warn('saveMaleta', error); return { ok:false, reason:error.message }; }
+  return { ok:true };
+}
+export async function deleteMaletaCloud(id) {
+  const c = await client(); if (!c || !id) return;
+  await c.from('maletas').delete().eq('id', id);
+}
+export async function pullMaletas() {
+  const c = await client(); if (!c) return null;
+  const { data, error } = await c.from('maletas').select('*').order('created_at', { ascending: false });
+  if (error) { console.warn('pullMaletas', error); return null; }
+  return data;
 }
 
 export async function trackEvent(type, data) {
