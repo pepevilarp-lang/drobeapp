@@ -526,25 +526,26 @@ function vAdd(m){
     <div class="title">Tu armario,<br>sin escribir nada</div>
     <div class="sub">Una foto o el ticket. Pipeline de IA especializado en moda. Nunca inventa.</div></div>
     <div style="margin-top:24px">
-      <div class="opt reveal" style="animation-delay:.05s;position:relative">
+      <button class="opt reveal" id="opt_prenda" style="animation-delay:.05s">
         <span class="ring">${svg('cam',24)}</span>
         <div><div class="t1">Fotografiar prenda</div><div class="t2">Reconocimiento especializado en moda</div></div>
-        <span class="arr">${svg('chev',20)}</span>
-        <input id="pf" type="file" accept="image/*" class="file-overlay"/>
-      </div>
-      <div class="opt alt reveal" style="animation-delay:.1s;position:relative">
+        <span class="arr">${svg('chev',20)}</span></button>
+      <input id="pf" type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"/>
+      <button class="opt alt reveal" id="opt_ticket" style="animation-delay:.1s">
         <span class="ring">${svg('scan',24)}</span>
         <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · ticket vinculado</div></div>
-        <span class="arr">${svg('chev',20)}</span>
-        <input id="tf" type="file" accept="image/*" class="file-overlay"/>
-      </div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <input id="tf" type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"/>
       <button class="opt alt reveal" id="manual" style="animation-delay:.15s">
         <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pen',24)}</span>
         <div><div class="t1">Añadir manualmente</div><div class="t2">Rellena los datos tú mismo</div></div>
         <span class="arr">${svg('chev',20)}</span></button>
     </div>`;
-  m.querySelector('#pf').addEventListener('change',e=>handleScan(m,e,'prenda'));
-  m.querySelector('#tf').addEventListener('change',e=>handleScan(m,e,'ticket'));
+  const pf=m.querySelector('#pf'), tf=m.querySelector('#tf');
+  m.querySelector('#opt_prenda').onclick=()=>pf.click();
+  m.querySelector('#opt_ticket').onclick=()=>tf.click();
+  pf.addEventListener('change',e=>handleScan(m,e,'prenda'));
+  tf.addEventListener('change',e=>handleScan(m,e,'ticket'));
   m.querySelector('#manual').onclick=()=>showPrenda(m,null,null);
 }
 
@@ -667,12 +668,11 @@ function openScannerTienda(){
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
     <div class="backbar"><button id="scb">${svg('back',20)}</button><span class="t">Estás en tienda</span></div>
     <div class="note" style="margin-bottom:16px">${svg('store',18)}<span>Haz una foto de la prenda o descríbela. Drobe busca el mejor precio de esa marca <b>y alternativas más baratas que se le parezcan</b>.</span></div>
-    <div class="opt" style="margin-bottom:14px;position:relative">
+    <button class="opt" id="sc_photo_btn" style="margin-bottom:14px">
       <span class="ring">${svg('cam',24)}</span>
       <div><div class="t1">Foto de la prenda o etiqueta</div><div class="t2">Drobe la identifica automáticamente</div></div>
-      <span class="arr">${svg('chev',20)}</span>
-      <input id="sc_photo" type="file" accept="image/*" class="file-overlay"/>
-    </div>
+      <span class="arr">${svg('chev',20)}</span></button>
+    <input id="sc_photo" type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"/>
     <div class="field"><label>O descríbela</label><input id="sc_q" placeholder="Pantalón lino azul marino Ecoalf…"/></div>
     <div class="row2">
       <div class="field"><label>Marca</label><input id="sc_brand" placeholder="Ecoalf"/></div>
@@ -684,6 +684,7 @@ function openScannerTienda(){
   </div>`;
   document.body.appendChild(el);
   el.querySelector('#scb').onclick=()=>el.remove();
+  el.querySelector('#sc_photo_btn').onclick=()=>el.querySelector('#sc_photo').click();
 
   // Foto → Groq vision rellena los campos
   el.querySelector('#sc_photo').addEventListener('change',async ev=>{
