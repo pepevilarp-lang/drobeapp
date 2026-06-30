@@ -32,6 +32,7 @@ module.exports = async function handler(req, res) {
   const brand = (body && body.brand) || '';
   const productType = (body && body.productType) || ''; // "pantalón lino azul marino"
   const maxPrice = (body && body.maxPrice) || null;     // para filtrar alternativas más baratas
+  const ownedBrands = (body && body.ownedBrands) || [];  // marcas que el usuario ya tiene, para priorizar
   const country = (body && body.country) || 'es';
   if (!query && !productType) { res.status(400).json({ error: 'Falta query' }); return; }
 
@@ -48,11 +49,17 @@ module.exports = async function handler(req, res) {
   }
   let lastError = null;
 
+  function parsePrice(str){
+    if(!str) return null;
+    const m=String(str).replace(/\./g,'').replace(',','.').match(/(\d+(\.\d+)?)/);
+    return m?parseFloat(m[1]):null;
+  }
   function mapItem(p) {
+    const pv = typeof p.extracted_price === 'number' ? p.extracted_price : parsePrice(p.price);
     return {
       title: p.title,
-      price: p.price || null,
-      price_value: typeof p.extracted_price === 'number' ? p.extracted_price : null,
+      price: p.price || (pv?pv+' €':null),
+      price_value: pv,
       source: p.source || '',
       link: p.product_link || p.link || '',
       thumbnail: p.thumbnail || '',
@@ -67,41 +74,55 @@ module.exports = async function handler(req, res) {
     // Para marcas pequeñas, simplificar: quitar colores/adjetivos extra
     const simpleQuery = brand && productType ? brand + ' ' + productType : exactQuery;
     const altQuery = productType || query;
+    const brandLC = (brand||'').toLowerCase();
 
-    // Búsqueda 1: query exacta
-    let exactRaw = await serpSearch(exactQuery);
-    let exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
+    // descartar precios irrisorios (ruido de marketplaces) — menos de 8€ en ropa = sospechoso
+    const validPrice = p => !p.price_value || p.price_value >= 8;
+    // pertenece a la marca buscada (en título o en source/tienda)
+    const matchesBrand = p => brandLC && (
+      (p.title||'').toLowerCase().includes(brandLC) ||
+      (p.source||'').toLowerCase().includes(brandLC)
+    );
 
-    // Fallback 1: query simplificada (marca + tipo)
-    if (!exact.length && simpleQuery !== exactQuery) {
-      exactRaw = await serpSearch(simpleQuery);
-      exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
-    }
-    // Fallback 2: solo el tipo de prenda con marca
-    if (!exact.length && brand && altQuery) {
-      exactRaw = await serpSearch(brand + ' ' + altQuery.split(' ').slice(0,2).join(' '));
-      exact = exactRaw.map(mapItem).filter(p => p.title && p.price_value);
+    // BÚSQUEDA EXACTA: solo productos de LA MISMA marca
+    let exact = [];
+    if (brand) {
+      let raw = await serpSearch(exactQuery);
+      exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p));
+      // si la query con color no da, reintentar con marca + tipo
+      if (!exact.length && simpleQuery !== exactQuery) {
+        raw = await serpSearch(simpleQuery);
+        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p));
+      }
+      // último intento: buscar solo la marca + primera palabra del tipo
+      if (!exact.length && altQuery) {
+        raw = await serpSearch(brand + ' ' + altQuery.split(' ')[0]);
+        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p));
+      }
+    } else {
+      // sin marca: la query tal cual
+      const raw = await serpSearch(exactQuery);
+      exact = raw.map(mapItem).filter(p => p.title && validPrice(p));
     }
     exact.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
 
     // Búsqueda 2: alternativas similares de otras marcas — SIEMPRE se ejecuta
     let alternatives = [];
     if (altQuery) {
-      // Buscar versión genérica del producto (sin marca)
       const genericQuery = altQuery.replace(new RegExp(brand || '', 'gi'), '').trim() || altQuery;
       const altRaw = await serpSearch(genericQuery);
-      alternatives = altRaw.map(mapItem)
-        .filter(p => p.title && p.price_value)
-        .filter(p => !brand || !((p.title||'').toLowerCase().includes((brand||'').toLowerCase())))
-        .filter(p => !maxPrice || p.price_value < maxPrice * 0.95); // al menos 5% más barato
-      alternatives.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
-      // Si no hay alternativas más baratas, mostrar las más baratas sin filtro de precio
-      if (!alternatives.length) {
-        alternatives = altRaw.map(mapItem)
-          .filter(p => p.title && p.price_value)
-          .filter(p => !brand || !((p.title||'').toLowerCase().includes((brand||'').toLowerCase())));
-        alternatives.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
-      }
+      const isOwned = p => ownedBrands.some(b => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()));
+      const baseAlt = altRaw.map(mapItem)
+        .filter(p => p.title && validPrice(p))
+        .filter(p => !brandLC || !( (p.title||'').toLowerCase().includes(brandLC) || (p.source||'').toLowerCase().includes(brandLC) ));
+      // preferir más baratas que la de referencia
+      alternatives = baseAlt.filter(p => !maxPrice || !p.price_value || p.price_value < maxPrice * 0.95);
+      if (!alternatives.length) alternatives = baseAlt;
+      alternatives.sort((a, b) => {
+        const oa = isOwned(a) ? 0 : 1, ob = isOwned(b) ? 0 : 1;
+        if (oa !== ob) return oa - ob;
+        return (a.price_value || 1e9) - (b.price_value || 1e9);
+      });
     }
 
     res.status(200).json({
