@@ -3,8 +3,8 @@
 // localStorage y este módulo no descarga nada. El SDK se importa solo cuando
 // hay credenciales configuradas (import dinámico).
 
-const SUPABASE_URL = '';       // p.ej. https://xxxx.supabase.co
-const SUPABASE_ANON_KEY = '';  // anon public key (es pública por diseño; la seguridad la da RLS)
+const SUPABASE_URL = 'https://tgdffxvuqsgotlkvfoxh.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRnZGZmeHZ1cXNnb3Rsa3Zmb3hoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1NjQyMzQsImV4cCI6MjA5ODE0MDIzNH0.Y6KvJKOCf7vn0cerLw5q5YgiIeyEuIv5Sm6rIYGUV7E';
 
 let _client; // undefined = sin resolver, null = no configurado
 async function client() {
@@ -30,11 +30,24 @@ export async function onAuth(cb) {
 // Intenta iniciar sesión; si no existe la cuenta, la crea.
 export async function signInOrUp(email, password) {
   const c = await client(); if (!c) throw new Error('Supabase no configurado');
+  // 1) Intentar iniciar sesión
   const inRes = await c.auth.signInWithPassword({ email, password });
   if (!inRes.error) return inRes.data.session;
+
+  const msg = (inRes.error.message || '').toLowerCase();
+  // Credenciales inválidas puede significar: cuenta no existe, contraseña mal, o email sin confirmar
+  // 2) Intentar registrar
   const upRes = await c.auth.signUp({ email, password });
-  if (upRes.error) throw upRes.error;
-  return upRes.data.session; // null si requiere confirmar email
+  if (upRes.error) {
+    const um = (upRes.error.message || '').toLowerCase();
+    if (um.includes('already') || um.includes('registered')) {
+      // La cuenta ya existe → el login falló por contraseña incorrecta o email sin confirmar
+      throw new Error('Esa cuenta ya existe. Revisa la contraseña, o confirma tu email si acabas de registrarte.');
+    }
+    throw upRes.error;
+  }
+  // Registro OK. Si hay sesión, dentro; si no, requiere confirmar email.
+  return upRes.data.session; // null = revisar email
 }
 export async function signOut() { const c = await client(); if (c) await c.auth.signOut(); }
 
@@ -42,17 +55,27 @@ export async function signOut() { const c = await client(); if (c) await c.auth.
 const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 function toRow(g) {
   return {
-    brand: g.brand || null, name: g.name, category: g.category || null,
-    color: g.color || null, size: g.size || null, condition: g.condition || null,
-    purchase_price: Number(g.price) || 0, status: g.status || 'uso',
-    image_url: g.img || null, worn: g.worn || 0
+    id: g.id,
+    brand: g.brand || null, name: g.name || 'Prenda',
+    cat: g.cat || null, cat_group: g.catGroup || null,
+    fit: g.fit || null, color: g.color || null,
+    colors: Array.isArray(g.colors) ? g.colors : (g.color ? [g.color] : null),
+    material: g.material || null, size: g.size || null,
+    season: g.season || null, formality: g.formality || null,
+    price: Number(g.price) || 0, store: g.store || null,
+    bought_at: g.bought || null, cond: g.cond || null,
+    worn: g.worn || 0, last_worn: g.lastWorn || null,
+    status: g.status || 'uso', img: g.img || null, sku: g.sku || null
   };
 }
 export function fromRow(r) {
   return {
-    id: r.id, brand: r.brand, name: r.name, category: r.category, color: r.color,
-    size: r.size, condition: r.condition, price: Number(r.purchase_price) || 0,
-    status: r.status, img: r.image_url, worn: r.worn || 0
+    id: r.id, brand: r.brand, name: r.name, cat: r.cat, catGroup: r.cat_group,
+    fit: r.fit, color: r.color, colors: r.colors || (r.color ? [r.color] : []),
+    material: r.material, size: r.size, season: r.season, formality: r.formality,
+    price: Number(r.price) || 0, store: r.store, bought: r.bought_at, cond: r.cond,
+    worn: r.worn || 0, lastWorn: r.last_worn, status: r.status, img: r.img, sku: r.sku,
+    photos: [], docs: [], tags: []
   };
 }
 
@@ -68,16 +91,33 @@ export async function pushGarment(g, forceInsert = false) {
   const { data: { user } } = await c.auth.getUser();
   if (!user) return;
   const row = { ...toRow(g), user_id: user.id };
-  if (!forceInsert && isUuid(g.id)) row.id = g.id; // upsert por id si ya es uuid
-  const { error } = await c.from('garments').upsert(row);
+  // la columna id es text sin default: SIEMPRE hay que enviar el id
+  const { error } = await c.from('garments').upsert(row, { onConflict: 'id' });
   if (error) console.warn('push', error);
 }
 export async function deleteGarmentCloud(id) {
-  const c = await client(); if (!c || !isUuid(id)) return;
+  const c = await client(); if (!c || !id) return;
   await c.from('garments').delete().eq('id', id);
 }
 export async function fetchMarketplace() {
   const c = await client(); if (!c) return [];
   const { data } = await c.from('garments').select('*').eq('status', 'venta');
   return data || [];
+}
+
+// B2B enrichment methods
+
+export async function updateProfile(data) {
+  const c = await client(); if (!c) return;
+  const { data: { user } } = await c.auth.getUser();
+  if (!user) return;
+  await c.from('profiles').upsert({ id: user.id, email: user.email, ...data, updated_at: new Date().toISOString() });
+}
+
+export async function trackEvent(type, data) {
+  const c = await client(); if (!c) return;
+  const { data: { user } } = await c.auth.getUser();
+  if (!user) return;
+  const table = type === 'scan' ? 'scan_events' : 'purchase_events';
+  await c.from(table).insert({ user_id: user.id, ...data });
 }
