@@ -171,6 +171,42 @@ function computeStyleDNA(){
   };
 }
 
+// Contexto del usuario: lo que Drobe sabe de él para personalizar TODO.
+// Cuantas más prendas tenga, más rico es este perfil → mejores recomendaciones.
+function userContext(){
+  const dna=computeStyleDNA();
+  const p=store.profile||{};
+  const brands=(dna.topBrands||[]).map(b=>b.brand);
+  const colors=(dna.topColors||[]).map(c=>c.color);
+  return {
+    sex: p.sex && p.sex!=='Prefiero no decir' ? p.sex : '',
+    age: p.age || '',
+    segment: dna.segment || '',          // premium / mid / budget
+    avgPrice: dna.avgPrice || 0,          // ticket medio
+    topBrands: brands,                    // marcas que ya usa
+    topColors: colors,                    // colores que lleva
+    topFit: dna.topFit || '',             // corte preferido
+    topFormality: dna.topFormality || '', // registro
+    materials: dna.topMaterials || [],
+    garmentCount: dna.garmentCount || 0
+  };
+}
+// Frase de contexto lista para inyectar en prompts de IA
+function userContextPrompt(){
+  const u=userContext();
+  if(!u.garmentCount) return 'El usuario aún no tiene prendas registradas; no asumas gustos.';
+  const parts=[];
+  if(u.sex) parts.push(`Sexo: ${u.sex}`);
+  if(u.age) parts.push(`Edad: ${u.age}`);
+  if(u.segment) parts.push(`Segmento de precio: ${u.segment} (gasta de media ${u.avgPrice}€ por prenda)`);
+  if(u.topBrands.length) parts.push(`Marcas que ya usa: ${u.topBrands.join(', ')}`);
+  if(u.topColors.length) parts.push(`Colores habituales: ${u.topColors.join(', ')}`);
+  if(u.topFit) parts.push(`Corte preferido: ${u.topFit}`);
+  if(u.topFormality) parts.push(`Registro: ${u.topFormality}`);
+  if(u.materials.length) parts.push(`Materiales frecuentes: ${u.materials.join(', ')}`);
+  return 'PERFIL DEL USUARIO (úsalo para personalizar y acertar):\n'+parts.map(x=>'- '+x).join('\n');
+}
+
 // Drobe Score (0-100): salud del armario
 function computeDrobeScore(){
   const gs=store.garments.filter(g=>g.status!=='venta');
@@ -530,12 +566,12 @@ function vAdd(m){
         <span class="ring">${svg('cam',24)}</span>
         <div><div class="t1">Fotografiar prenda</div><div class="t2">Reconocimiento especializado en moda</div></div>
         <span class="arr">${svg('chev',20)}</span></button>
-      <input id="pf" type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"/>
+      <input id="pf" type="file" accept="image/*" style="position:absolute;left:-9999px;top:0;opacity:0"/>
       <button class="opt alt reveal" id="opt_ticket" style="animation-delay:.1s">
         <span class="ring">${svg('scan',24)}</span>
         <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · ticket vinculado</div></div>
         <span class="arr">${svg('chev',20)}</span></button>
-      <input id="tf" type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"/>
+      <input id="tf" type="file" accept="image/*" style="position:absolute;left:-9999px;top:0;opacity:0"/>
       <button class="opt alt reveal" id="manual" style="animation-delay:.15s">
         <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pen',24)}</span>
         <div><div class="t1">Añadir manualmente</div><div class="t2">Rellena los datos tú mismo</div></div>
@@ -544,8 +580,8 @@ function vAdd(m){
   const pf=m.querySelector('#pf'), tf=m.querySelector('#tf');
   m.querySelector('#opt_prenda').onclick=()=>pf.click();
   m.querySelector('#opt_ticket').onclick=()=>tf.click();
-  pf.addEventListener('change',e=>handleScan(m,e,'prenda'));
-  tf.addEventListener('change',e=>handleScan(m,e,'ticket'));
+  pf.onchange=e=>handleScan(m,e,'prenda');
+  tf.onchange=e=>handleScan(m,e,'ticket');
   m.querySelector('#manual').onclick=()=>showPrenda(m,null,null);
 }
 
@@ -727,16 +763,16 @@ function openScannerTienda(){
       ? q.replace(new RegExp('\\b'+brand+'\\b','gi'),'').replace(/\s+/g,' ').trim()||q
       : q;
 
-    const sys=`Eres el asesor de compra de Drobe. El usuario está en una tienda. Sé directo. Devuelve SOLO JSON:
-{"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases directas","precio_ok":true,"precio_comentario":"","looks_nuevos":0}`;
-    const usr=`Armario: ${store.garments.map(g=>g.brand+' '+g.cat+' '+g.color).join(', ')}.
+    const sys=`Eres el asesor de compra de Drobe. El usuario está en una tienda. Conoces su perfil real (sexo, presupuesto, marcas que usa, estilo) y lo usas para acertar. Sé directo. Devuelve SOLO JSON:
+{"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"1-2 frases directas que tengan en cuenta su estilo y presupuesto","precio_ok":true,"precio_comentario":"","looks_nuevos":0}`;
+    const usr=`${userContextPrompt()}\n\nArmario actual: ${store.garments.map(g=>g.brand+' '+g.cat+' '+g.color).join(', ')}.
 ${dupAlert} ${mySize}
-Mira en tienda: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.
-Estilo: ${dna.topFit||''}, presupuesto medio ${dna.avgPrice||0}€.`;
+Mira en tienda: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.`;
 
+    const u=userContext();
     const [r, offers]=await Promise.all([
       callAI(sys,usr),
-      searchOffersExtensive({query:q||brand,brand,productType,maxPrice:price,ownedBrands:(computeStyleDNA().topBrands||[]).map(b=>b.brand)})
+      searchOffersExtensive({query:q||brand,brand,productType,maxPrice:price,ownedBrands:u.topBrands,sex:u.sex})
     ]);
 
     trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'analyzed',session_id:Date.now().toString(36)});
@@ -1083,9 +1119,9 @@ async function searchOffers(query){
     const d=await r.json(); return d&&d.available?d.results||[]:null;
   }catch(e){ return null; }
 }
-async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands}){
+async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands,sex}){
   try{
-    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands})});
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands,sex})});
     const d=await r.json();
     if(!d||!d.available)return null;
     return {exact:d.exact||[],alternatives:d.alternatives||[]};
@@ -1143,9 +1179,13 @@ function renderAsesorForm(el,prefill={}){
     const out=el.querySelector('#ac_out');
     this.disabled=true; this.innerHTML=`${svg('load',18)} Analizando…`; this.querySelector('svg').classList.add('spin');
     const desc=buildDesc(data); const searchQ=buildSearchQuery(data);
-    const sys=`Eres un asesor de compra honesto especializado en moda. Devuelve SOLO JSON: {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"2-3 frases específicas mencionando prendas concretas de su armario","ya_tienes":"descripción de prenda parecida o vacío","looks_nuevos":número,"coste_por_uso_estimado":número}.`;
-    const usr=`Armario: ${wardrobeSummary()}.\nQuiere comprar: ${desc}${data.price?` por ${data.price}€`:''}.`;
-    const [r,offers]=await Promise.all([callAI(sys,usr),searchOffers(searchQ)]);
+    const u=userContext();
+    const sys=`Eres un asesor de compra honesto especializado en moda. Tienes en cuenta el perfil real del usuario para acertar (sexo, presupuesto, marcas que ya usa, colores y corte que prefiere). Devuelve SOLO JSON: {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"2-3 frases específicas mencionando prendas concretas de su armario y su estilo","ya_tienes":"descripción de prenda parecida o vacío","looks_nuevos":número,"coste_por_uso_estimado":número}.`;
+    const usr=`${userContextPrompt()}\n\nArmario actual: ${wardrobeSummary()}.\nQuiere comprar: ${desc}${data.price?` por ${data.price}€`:''}.`;
+    const [r,offers]=await Promise.all([
+      callAI(sys,usr),
+      searchOffersExtensive({query:searchQ,brand:data.brand,productType:[data.tipo,data.color,data.material].filter(Boolean).join(' '),maxPrice:data.price,ownedBrands:u.topBrands,sex:u.sex})
+    ]);
     let html='';
     if(r){
       const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
@@ -1154,8 +1194,15 @@ function renderAsesorForm(el,prefill={}){
     }
     if(offers===null){
       html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Añade <b>SERPAPI_KEY</b> en Vercel para ver precios reales de tiendas.</span></div>`;
-    } else if(offers.length){
-      html+=`<div class="shead"><h2>Mejores ofertas</h2></div>`+offers.map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:''}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+    } else {
+      if(offers.exact&&offers.exact.length){
+        html+=`<div class="shead"><h2>${data.brand||'Esta prenda'} · mejor precio</h2></div>`+
+          offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+      }
+      if(offers.alternatives&&offers.alternatives.length){
+        html+=`<div class="shead"><h2>Alternativas para ti</h2></div><div class="sub" style="margin:-4px 0 10px">Parecidas y más baratas, priorizando marcas que ya usas.</div>`+
+          offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+      }
     }
     out.innerHTML=html;
     this.disabled=false; this.innerHTML=`${svg('spark',18)} Analizar otra`;
@@ -1180,11 +1227,11 @@ async function openHuecos(){
   el.querySelector('.empty svg')?.classList.add('spin');
   el.querySelector('#hb').onclick=()=>el.remove();
   const groups={};store.garments.forEach(g=>{const k=g.catGroup||catToGroup(g.cat||'');groups[k]=(groups[k]||0)+1;});
-  const sys=`Eres un asesor de armario. Analiza qué le falta al usuario para tener un armario versátil.
+  const sys=`Eres un asesor de armario. Analiza qué le falta al usuario para tener un armario versátil, teniendo en cuenta su perfil real (sexo, presupuesto, estilo, marcas y colores que ya usa) para que las recomendaciones encajen con él.
 Recomienda TIPOS de prenda (no marcas). Devuelve SOLO JSON:
-{"resumen":"1 frase sobre el estado de su armario","faltas":[{"prenda":"tipo concreto","motivo":"por qué le cundiría","busqueda":"términos para buscar"}]}.
+{"resumen":"1 frase sobre el estado de su armario y su estilo","faltas":[{"prenda":"tipo concreto","motivo":"por qué le cundiría dado su estilo","busqueda":"términos para buscar, acordes a su sexo y gama de precio"}]}.
 Máximo 4 faltas.`;
-  const usr=`Armario por categorías: ${JSON.stringify(groups)}. Prendas: ${wardrobeSummary()}.`;
+  const usr=`${userContextPrompt()}\n\nArmario por categorías: ${JSON.stringify(groups)}. Prendas: ${wardrobeSummary()}.`;
   callAI(sys,usr).then(async r=>{
     const out=el.querySelector('#h_out');
     if(!r||!r.faltas){out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY).</span></div>`;return;}
@@ -1531,9 +1578,16 @@ async function initCloud(){
 async function syncFromCloud(){
   if(!session)return;
   let rows=await cloud.pullGarments();
-  if(rows&&rows.length===0&&store.garments.length){ for(const g of store.garments)await cloud.pushGarment(g,true); rows=await cloud.pullGarments(); }
-  if(rows){
-    store.garments=rows.map(r=>{ const g=cloud.fromRow(r); g.catGroup=g.catGroup||catToGroup(g.cat||''); g.fit=g.fit||'Regular Fit'; g.colors=g.colors||[g.color]; g.docs=g.docs||[]; g.photos=g.photos||[]; return g; });
-    save();
+  if(rows===null) return; // error de red: conservar lo local, no tocar nada
+  // merge: subir cualquier prenda local que no esté ya en la nube
+  const cloudIds=new Set(rows.map(r=>r.id));
+  const localOnly=store.garments.filter(g=>!cloudIds.has(g.id));
+  if(localOnly.length){
+    for(const g of localOnly) await cloud.pushGarment(g);
+    rows=await cloud.pullGarments();
+    if(rows===null) return;
   }
+  store.garments=rows.map(r=>{ const g=cloud.fromRow(r); g.catGroup=g.catGroup||catToGroup(g.cat||''); g.fit=g.fit||'Regular Fit'; g.colors=g.colors&&g.colors.length?g.colors:[g.color]; g.docs=g.docs||[]; g.photos=g.photos||[]; return g; });
+  save();
+  render();
 }
