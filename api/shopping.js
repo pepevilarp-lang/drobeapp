@@ -178,30 +178,52 @@ module.exports = async function handler(req, res) {
     if (altQuery) {
       let genericQuery = altQuery.replace(new RegExp(brand || '', 'gi'), '').trim() || altQuery;
       // añadir sexo si no está ya en la query, para afinar (hombre/mujer)
-      if(sex && !/hombre|mujer|man|woman|men|women/i.test(genericQuery)){
-        genericQuery += ' ' + (/^h/i.test(sex)?'hombre':/^m/i.test(sex)?'mujer':'');
-      }
+      const sexWord = /^h/i.test(sex)?'hombre':/^m/i.test(sex)?'mujer':'';
+      if(sexWord && !/hombre|mujer|man|woman|men|women/i.test(genericQuery)) genericQuery += ' ' + sexWord;
       genericQuery = genericQuery.trim();
-      const altRaw = await serpSearch(genericQuery);
+
       const isOwned = p => ownedBrands.some(b => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()));
-      const baseAlt = altRaw.map(mapItem)
-        .filter(p => p.title && validPrice(p) && matchesType(p))
-        .filter(p => !brandLC || !( (p.title||'').toLowerCase().includes(brandLC) || (p.source||'').toLowerCase().includes(brandLC) ));
-      // preferir más baratas que la de referencia
-      alternatives = baseAlt.filter(p => !maxPrice || !p.price_value || p.price_value < maxPrice * 0.95);
-      if (!alternatives.length) alternatives = baseAlt;
+      const seen = new Set();
+      const collected = [];
+
+      // 1) PRIORIDAD: buscar explícitamente dentro de las marcas que el usuario YA usa.
+      //    Esto es lo que evita recomendar marcas ajenas a su estilo.
+      const brandsToTry = ownedBrands.slice(0, 3);
+      for (const b of brandsToTry) {
+        const bq = `${b} ${genericQuery}`.trim();
+        const raw = await serpSearch(bq);
+        raw.map(mapItem)
+          .filter(p => p.title && validPrice(p) && matchesType(p))
+          .filter(p => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()))
+          .forEach(p => { const k=(p.title||'')+p.price; if(!seen.has(k)){seen.add(k);collected.push(p);} });
+      }
+
+      // 2) Completar con búsqueda general SOLO si faltan resultados de sus marcas,
+      //    y aun así excluir la marca de referencia y respetar tipo/precio.
+      if (collected.length < 4) {
+        const altRaw = await serpSearch(genericQuery);
+        altRaw.map(mapItem)
+          .filter(p => p.title && validPrice(p) && matchesType(p))
+          .filter(p => !brandLC || !((p.title||'').toLowerCase().includes(brandLC) || (p.source||'').toLowerCase().includes(brandLC)))
+          .filter(p => !maxPrice || !p.price_value || p.price_value < maxPrice)
+          .forEach(p => { const k=(p.title||'')+p.price; if(!seen.has(k)){seen.add(k);collected.push(p);} });
+      }
+
+      alternatives = collected;
       alternatives.sort((a, b) => {
         const oa = isOwned(a) ? 0 : 1, ob = isOwned(b) ? 0 : 1;
-        if (oa !== ob) return oa - ob;
+        if (oa !== ob) return oa - ob;            // primero, marcas del usuario
         return (a.price_value || 1e9) - (b.price_value || 1e9);
       });
     }
 
     const exactOut = exact.slice(0, 5);
     const altOut = alternatives.slice(0, 5);
-    // resolver enlaces directos a tienda (máx 3 exact + 2 alt = 5 llamadas extra/escaneo)
-    await enrichDirect(exactOut, 3);
-    await enrichDirect(altOut, 2);
+    // presupuesto de llamadas: la búsqueda por marcas del usuario ya consume varias,
+    // así que limitamos la resolución de enlaces directos para no agotar la cuota.
+    const brandSearches = Math.min(ownedBrands.length, 3);
+    await enrichDirect(exactOut, brandSearches >= 2 ? 2 : 3);
+    await enrichDirect(altOut, brandSearches >= 2 ? 1 : 2);
 
     res.status(200).json({
       available: true,
