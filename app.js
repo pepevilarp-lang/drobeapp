@@ -736,7 +736,7 @@ Estilo: ${dna.topFit||''}, presupuesto medio ${dna.avgPrice||0}€.`;
 
     const [r, offers]=await Promise.all([
       callAI(sys,usr),
-      searchOffersExtensive({query:q||brand,brand,productType,maxPrice:price})
+      searchOffersExtensive({query:q||brand,brand,productType,maxPrice:price,ownedBrands:(computeStyleDNA().topBrands||[]).map(b=>b.brand)})
     ]);
 
     trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'analyzed',session_id:Date.now().toString(36)});
@@ -1083,9 +1083,9 @@ async function searchOffers(query){
     const d=await r.json(); return d&&d.available?d.results||[]:null;
   }catch(e){ return null; }
 }
-async function searchOffersExtensive({query,brand,productType,maxPrice}){
+async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands}){
   try{
-    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice})});
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands})});
     const d=await r.json();
     if(!d||!d.available)return null;
     return {exact:d.exact||[],alternatives:d.alternatives||[]};
