@@ -354,3 +354,16 @@ main{flex:1;padding:0 22px 120px}
 .hl-text{position:absolute;left:20px;right:20px;bottom:18px;color:#F6F1E9}
 .hl-b{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#D8C9B0}
 .hl-n{font-family:var(--serif);font-size:23px;font-weight:500;font-style:italic;line-height:1.2;margin-top:4px}
+
+/* guardar maleta + maletas guardadas */
+.savebox{display:flex;gap:8px;margin-top:18px}
+.savebox input{flex:1;background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:0 16px;font-size:15px;color:var(--ink)}
+.savebox .btn{width:auto;white-space:nowrap;padding:14px 18px}
+.maleta-card{background:var(--surface);border:1px solid var(--hair);border-radius:var(--r-m);padding:16px;margin-bottom:12px;box-shadow:var(--s1)}
+.maleta-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.maleta-n{font-family:var(--serif);font-size:19px;font-weight:500;font-style:italic;letter-spacing:-.01em}
+.maleta-s{font-size:12px;color:var(--ink3);margin-top:2px}
+.maleta-del{width:34px;height:34px;border-radius:10px;background:var(--surface-2);color:var(--ink3);display:flex;align-items:center;justify-content:center;flex:none}
+.maleta-thumbs{display:flex;gap:8px;margin-top:14px;overflow-x:auto}
+.maleta-thumbs .mt{flex:0 0 auto;width:54px;height:68px;border-radius:10px;overflow:hidden;background:var(--noir-2)}
+.maleta-thumbs .mt img{width:100%;height:100%;object-fit:cover;object-position:center top}
