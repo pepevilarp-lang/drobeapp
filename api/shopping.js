@@ -33,6 +33,7 @@ module.exports = async function handler(req, res) {
   const productType = (body && body.productType) || ''; // "pantalón lino azul marino"
   const maxPrice = (body && body.maxPrice) || null;     // para filtrar alternativas más baratas
   const ownedBrands = (body && body.ownedBrands) || [];  // marcas que el usuario ya tiene, para priorizar
+  const sex = (body && body.sex) || '';                  // para afinar (hombre/mujer)
   const country = (body && body.country) || 'es';
   if (!query && !productType) { res.status(400).json({ error: 'Falta query' }); return; }
 
@@ -175,7 +176,12 @@ module.exports = async function handler(req, res) {
     // Búsqueda 2: alternativas similares de otras marcas — SIEMPRE se ejecuta
     let alternatives = [];
     if (altQuery) {
-      const genericQuery = altQuery.replace(new RegExp(brand || '', 'gi'), '').trim() || altQuery;
+      let genericQuery = altQuery.replace(new RegExp(brand || '', 'gi'), '').trim() || altQuery;
+      // añadir sexo si no está ya en la query, para afinar (hombre/mujer)
+      if(sex && !/hombre|mujer|man|woman|men|women/i.test(genericQuery)){
+        genericQuery += ' ' + (/^h/i.test(sex)?'hombre':/^m/i.test(sex)?'mujer':'');
+      }
+      genericQuery = genericQuery.trim();
       const altRaw = await serpSearch(genericQuery);
       const isOwned = p => ownedBrands.some(b => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()));
       const baseAlt = altRaw.map(mapItem)
