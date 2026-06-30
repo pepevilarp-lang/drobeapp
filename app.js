@@ -102,23 +102,29 @@ const SEED = [
 const KEY = 'drobe.v3';
 let store = load();
 function load(){
-  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};return s;}} }catch(e){}
-  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{}};
+  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];return s;}} }catch(e){}
+  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[]};
 }
 function save(){ try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){} }
 function showSyncWarning(reason){
   const old=document.getElementById('syncwarn'); if(old)old.remove();
   const el=document.createElement('div'); el.id='syncwarn'; el.className='syncwarn';
-  el.innerHTML=`${svg('spark',16)} Guardado solo en este dispositivo (sin nube)${reason==='no_session'?'. Confirma tu email o vuelve a entrar.':''}`;
+  const txt = reason==='no_session' ? 'Guardado solo en este dispositivo. Confirma tu email o vuelve a entrar.'
+    : reason==='no_client' ? 'Guardado solo en local (sin conexión a la nube).'
+    : 'No se pudo guardar en la nube. Motivo: '+(reason||'desconocido');
+  el.innerHTML=`${svg('spark',16)} ${esc(txt)}`;
   document.body.appendChild(el);
-  setTimeout(()=>el.remove(),4500);
+  setTimeout(()=>el.remove(),7000);
 }
 const findG = id => store.garments.find(g=>g.id==id);
 function addGarment(g){
   g.id=g.id||('g'+Date.now()+Math.random().toString(36).slice(2,6));
   store.garments.unshift(g); save();
-  if(session) cloud.pushGarment(g).then(r=>{ if(!r.ok) showSyncWarning(r.reason); });
-  else showSyncWarning('no_session');
+  if(session){
+    cloud.pushGarment(g)
+      .then(r=>{ if(!r||!r.ok) showSyncWarning(r&&r.reason); })
+      .catch(e=>showSyncWarning(e&&e.message));
+  } else showSyncWarning('no_session');
 }
 const cpw = g => g.price/Math.max(g.worn,1);
 
@@ -900,8 +906,10 @@ function maletaStep1(el){
       </div>
       <div id="cal" class="trip-cal"></div>
       <button class="btn dark" id="next1" style="margin-top:20px">${svg('chev',18)} Siguiente</button>
+      ${(store.maletas||[]).length?`<button class="btn ghost" id="seemaletas" style="margin-top:10px">${svg('pack',18)} Mis maletas (${store.maletas.length})</button>`:''}
     </div>`;
   el.querySelector('#mb').onclick=()=>el.remove();
+  el.querySelector('#seemaletas')?.addEventListener('click',()=>openMaletasGuardadas());
   buildCalendar(el);
   el.querySelector('#dest').addEventListener('input',e=>suggestDest(e.target.value,el.querySelector('#sugg'),el));
   el.querySelector('#next1').onclick=()=>{ trip.dest=el.querySelector('#dest').value; if(trip.dest&&trip.days>0)maletaStep2(el); };
@@ -1061,9 +1069,51 @@ async function maletaPackPremium(el){
     </div>
     ${must.length?`<div class="shead"><h2>Imprescindibles</h2></div>${must.map(g=>`<div class="chk"><span class="ic">${svg('check',16)}</span><span><b>${g.brand}</b> ${g.name}</span></div>`).join('')}`:''}
     ${missing.length?`<div class="shead"><h2>Ten en cuenta</h2></div>${missing.map(x=>`<div class="chk warn"><span class="ic">${svg('spark',16)}</span><span>${x}</span></div>`).join('')}`:''}
-    <button class="btn ghost" id="redo" style="margin-top:14px">Nueva maleta</button>`;
+    <div class="savebox">
+      <input id="mname" placeholder="${trip.dest||'Mi viaje'}" value="${esc(trip.dest||'')}" />
+      <button class="btn dark" id="savemaleta">${svg('pack',18)} Guardar maleta</button>
+    </div>
+    <button class="btn ghost" id="redo" style="margin-top:10px">Nueva maleta</button>`;
   sum.style.opacity='1';
   sum.querySelector('#redo').onclick=()=>maletaStep1(el);
+  sum.querySelector('#savemaleta').onclick=function(){
+    const nm=(sum.querySelector('#mname').value||trip.dest||'Mi viaje').trim();
+    saveMaleta({name:nm,dest:trip.dest,days:trip.days,plan:trip.plan,items:plan.sel.map(g=>g.id),looks,weight:Number(weight.toFixed(1))});
+    this.disabled=true; this.innerHTML=`${svg('check',18)} Guardada`;
+  };
+}
+
+function saveMaleta(mal){
+  store.maletas=store.maletas||[];
+  mal.id='m'+Date.now()+Math.random().toString(36).slice(2,5);
+  mal.createdAt=new Date().toISOString();
+  store.maletas.unshift(mal);
+  save();
+  if(session) cloud.saveMaletaCloud(mal).then(r=>{ if(r&&!r.ok) showSyncWarning(r.reason); });
+}
+function deleteMaleta(id){
+  store.maletas=(store.maletas||[]).filter(m=>m.id!==id);
+  save();
+  if(session) cloud.deleteMaletaCloud(id);
+}
+function openMaletasGuardadas(){
+  const mals=store.maletas||[];
+  const el=document.createElement('div'); el.className='ficha'; el.id='maletas';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="mgb">${svg('back',20)}</button><span class="t">Mis maletas</span></div>
+    ${mals.length?'':`<div class="empty" style="padding-top:60px">${svg('pack',28)}<div style="margin-top:12px">Aún no has guardado ninguna maleta.</div></div>`}
+    ${mals.map(m=>{
+      const its=(m.items||[]).map(id=>findG(id)).filter(Boolean);
+      return `<div class="maleta-card" data-id="${m.id}">
+        <div class="maleta-head"><div><div class="maleta-n">${esc(m.name)}</div><div class="maleta-s">${m.dest||''}${m.days?' · '+m.days+' días':''} · ${its.length} prendas</div></div>
+          <button class="maleta-del" data-del="${m.id}">${svg('trash',16)}</button></div>
+        <div class="maleta-thumbs">${its.slice(0,6).map(g=>`<div class="mt"><img src="${g.img||''}"/></div>`).join('')}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#mgb').onclick=()=>el.remove();
+  el.querySelectorAll('[data-del]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteMaleta(b.dataset.del); el.remove(); openMaletasGuardadas(); });
 }
 
 function buildMaletaPlan(){
@@ -1240,26 +1290,33 @@ async function openHuecos(){
   el.querySelector('.empty svg')?.classList.add('spin');
   el.querySelector('#hb').onclick=()=>el.remove();
   const groups={};store.garments.forEach(g=>{const k=g.catGroup||catToGroup(g.cat||'');groups[k]=(groups[k]||0)+1;});
-  const sys=`Eres un asesor de armario. Analiza qué le falta al usuario para tener un armario versátil, teniendo en cuenta su perfil real (sexo, presupuesto, estilo, marcas y colores que ya usa) para que las recomendaciones encajen con él.
-Recomienda TIPOS de prenda (no marcas). Devuelve SOLO JSON:
-{"resumen":"1 frase sobre el estado de su armario y su estilo","faltas":[{"prenda":"tipo concreto","motivo":"por qué le cundiría dado su estilo","busqueda":"términos para buscar, acordes a su sexo y gama de precio"}]}.
-Máximo 4 faltas.`;
+  const u=userContext();
+  const brandList=u.topBrands.length?u.topBrands.join(', '):'(aún sin marcas claras)';
+  const sys=`Eres el asesor de armario de Drobe. Tu trabajo es decir qué TIPO de prenda le falta al usuario, SIEMPRE coherente con su perfil real.
+REGLAS ESTRICTAS:
+- Las recomendaciones deben encajar con su sexo (${u.sex||'no indicado'}), su gama de precio (${u.segment||'media'}, ~${u.avgPrice||0}€/prenda) y su estilo (corte ${u.topFit||'?'}, colores ${u.topColors.join('/')||'?'}).
+- Para el campo "busqueda": prioriza marcas que el usuario YA usa (${brandList}). Si recomiendas una marca nueva, debe ser del MISMO segmento de precio y estilo, nunca fast-fashion barata si el usuario es premium, ni lujo si es budget.
+- Nunca propongas prendas estridentes o fuera de su paleta y registro.
+Devuelve SOLO JSON: {"resumen":"1 frase sobre su armario y su estilo","faltas":[{"prenda":"tipo concreto","motivo":"por qué le cundiría dado SU estilo","busqueda":"marca(preferiblemente suya) + tipo + color + ${u.sex||''}"}]}. Máximo 4 faltas.`;
   const usr=`${userContextPrompt()}\n\nArmario por categorías: ${JSON.stringify(groups)}. Prendas: ${wardrobeSummary()}.`;
   callAI(sys,usr).then(async r=>{
     const out=el.querySelector('#h_out');
     if(!r||!r.faltas){out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY).</span></div>`;return;}
     out.innerHTML=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Tu armario<span>Análisis de huecos</span></div></div><div class="say">${r.resumen||''}</div></div>`+
       `<div class="shead"><h2>Lo que te cundiría</h2></div>`+
-      r.faltas.map(f=>`<div class="gap" data-q="${esc(f.busqueda||f.prenda)}">
+      r.faltas.map(f=>`<div class="gap" data-q="${esc(f.busqueda||f.prenda)}" data-type="${esc(f.prenda)}">
         <div class="gap-main"><div class="gap-t">${f.prenda}</div><div class="gap-m">${f.motivo}</div></div>
         <button class="gap-btn">${svg('tag',16)} Buscar</button></div>`).join('');
     out.querySelectorAll('.gap').forEach(g=>g.querySelector('.gap-btn').onclick=async function(){
-      const q=g.dataset.q; this.disabled=true; this.innerHTML=`${svg('load',16)} …`; this.querySelector('svg').classList.add('spin');
-      const offers=await searchOffers(q);
+      const q=g.dataset.q, ptype=g.dataset.type;
+      this.disabled=true; this.innerHTML=`${svg('load',16)} …`; this.querySelector('svg').classList.add('spin');
+      // búsqueda con perfil: prioriza marcas del usuario y su sexo
+      const res=await searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:u.avgPrice?Math.round(u.avgPrice*1.6):null});
       let box=g.querySelector('.gap-offers'); if(!box){box=document.createElement('div');box.className='gap-offers';g.after(box);}
-      if(offers===null)box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY para ver ofertas reales.</span></div>`;
-      else if(offers.length)box.innerHTML=offers.slice(0,3).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:''}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
-      else box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Sin resultados.</span></div>`;
+      const items=res?[...(res.exact||[]),...(res.alternatives||[])]:null;
+      if(res===null)box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY para ver ofertas reales.</span></div>`;
+      else if(items&&items.length)box.innerHTML=items.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+      else box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Sin resultados para tu perfil.</span></div>`;
       this.disabled=false; this.innerHTML=`${svg('tag',16)} Buscar`;
     });
   });
@@ -1441,8 +1498,17 @@ function renderAuth(slot){
     return;
   }
   if(session){
-    slot.innerHTML=`<div class="note" style="margin-top:14px;background:#EAF4EE;color:#2c6e4f">${svg('check',18)}<span>☁ Sincronizado · ${session.user?.email||''} · <button id="logout" style="text-decoration:underline;color:inherit;cursor:pointer">Cerrar sesión</button></span></div>`;
+    slot.innerHTML=`<div class="note" style="margin-top:14px;background:#EAF1EA;color:#2c6e4f">${svg('check',18)}<span>☁ Sincronizado · ${session.user?.email||''} · <button id="logout" style="text-decoration:underline;color:inherit;cursor:pointer">Cerrar sesión</button></span></div>
+      <button class="btn ghost" id="diag" style="margin-top:10px">${svg('spark',18)} Diagnóstico de guardado</button>
+      <div id="diagout"></div>`;
     slot.querySelector('#logout').onclick=()=>cloud.signOut().then(()=>{session=null;render();});
+    slot.querySelector('#diag').onclick=async function(){
+      this.disabled=true; this.innerHTML=`${svg('load',18)} Probando…`; this.querySelector('svg')?.classList.add('spin');
+      const d=await cloud.diagnose();
+      const box=slot.querySelector('#diagout');
+      box.innerHTML=`<div class="note ${d.ok?'':'warn'}" style="margin-top:10px;display:block"><b>${d.ok?'✓ El guardado funciona':'✗ Hay un problema'}</b><br>${d.steps.map(s=>'· '+esc(s)).join('<br>')}</div>`;
+      this.disabled=false; this.innerHTML=`${svg('spark',18)} Diagnóstico de guardado`;
+    };
     return;
   }
   slot.innerHTML=`<div style="margin-top:14px">
@@ -1603,6 +1669,11 @@ async function syncFromCloud(){
       style_dna: profileRow.style_dna ?? store.profile?.style_dna,
       drobe_score: profileRow.drobe_score ?? store.profile?.drobe_score
     };
+  }
+  // traer maletas guardadas
+  const mals=await cloud.pullMaletas();
+  if(mals){
+    store.maletas=mals.map(m=>({id:m.id,name:m.name,dest:m.dest,days:m.days,plan:m.plan,items:m.items||[],looks:m.looks,weight:m.weight,createdAt:m.created_at}));
   }
   save();
   render();
