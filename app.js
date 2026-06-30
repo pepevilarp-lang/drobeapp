@@ -106,8 +106,20 @@ function load(){
   return {garments:JSON.parse(JSON.stringify(SEED)),profile:{}};
 }
 function save(){ try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){} }
+function showSyncWarning(reason){
+  const old=document.getElementById('syncwarn'); if(old)old.remove();
+  const el=document.createElement('div'); el.id='syncwarn'; el.className='syncwarn';
+  el.innerHTML=`${svg('spark',16)} Guardado solo en este dispositivo (sin nube)${reason==='no_session'?'. Confirma tu email o vuelve a entrar.':''}`;
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),4500);
+}
 const findG = id => store.garments.find(g=>g.id==id);
-function addGarment(g){ g.id=g.id||('g'+Date.now()+Math.random().toString(36).slice(2,6)); store.garments.unshift(g); save(); if(session)cloud.pushGarment(g); }
+function addGarment(g){
+  g.id=g.id||('g'+Date.now()+Math.random().toString(36).slice(2,6));
+  store.garments.unshift(g); save();
+  if(session) cloud.pushGarment(g).then(r=>{ if(!r.ok) showSyncWarning(r.reason); });
+  else showSyncWarning('no_session');
+}
 const cpw = g => g.price/Math.max(g.worn,1);
 
 /* ═══════════════════════════════════════════
@@ -388,19 +400,21 @@ function render(){
    ARMARIO
 ═══════════════════════════════════════════ */
 function vArmario(m){
-  const score=computeDrobeScore();
+  const look=pickOutfit();
   m.innerHTML=`<div class="reveal">
-    <div class="eyebrow">Tu vestidor</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-      <div class="title" style="margin-bottom:0">Armario <span class="muted">· ${store.garments.length}</span></div>
-      <div class="score-pill" title="Drobe Score: salud de tu armario">${svg('score',14)} ${score}</div>
-    </div></div>
-    <div style="margin-top:14px" class="reveal">
+    <div class="eyebrow">${WEATHER.city} · ${WEATHER.temp}°</div>
+    <div class="title">Hoy te queda<br>bien lo sencillo</div></div>
+    ${look.length?`<div class="hero-look reveal" style="animation-delay:.05s" id="herolook">
+      <div class="hl-ph">${look[0].img?`<img src="${look[0].img}"/>`:''}</div>
+      <div class="hl-text"><div class="hl-b">${look.map(g=>g.brand).join(' · ')}</div><div class="hl-n">${look.map(g=>g.name).join(' + ')}</div></div>
+    </div>`:''}
+    <div style="margin-top:18px" class="reveal">
       <div class="viewseg">
         ${['3d','grid'].map(x=>`<button data-mode="${x}" class="${wardMode===x?'on':''}">${x==='3d'?'Vestidor 3D':'Cuadrícula'}</button>`).join('')}
       </div></div>
     <div id="ward"></div>`;
   m.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{ if(wardMode!==b.dataset.mode){unmountWardrobe3D();wardMode=b.dataset.mode;vArmario(m);} });
+  const hl=m.querySelector('#herolook'); if(hl)hl.onclick=()=>openFicha(look[0].id);
   const ward=m.querySelector('#ward');
   if(wardMode==='3d'){
     ward.innerHTML=`<div class="stage3d" id="stage"><div class="hint">Cargando vestidor 3D…</div></div><div class="wardcap" id="wardcap"></div>`;
@@ -452,11 +466,10 @@ function renderFicha(){
       <button class="ficha-close" id="fclose">${svg('back',20)}</button>
       <button class="ficha-edit" id="fedit">${svg('pen',18)}</button>
       <div class="track" id="track">${photos.map(p=>`<img src="${p}"/>`).join('')}</div>
+      <div class="ficha-overlay"><div class="ficha-b">${g.brand}</div><div class="ficha-n">${g.name}</div></div>
       ${photos.length>1?`<div class="ficha-dots">${photos.map((_,i)=>`<i class="${i===0?'on':''}"></i>`).join('')}</div>`:''}
     </div>
     <div class="ficha-body">
-      <div class="ficha-b">${g.brand}</div>
-      <div class="ficha-n">${g.name}</div>
       <div class="ficha-row">
         ${[g.cat,g.fit,g.season,g.formality].filter(Boolean).map(p=>`<span class="pill">${p}</span>`).join('')}
         <span class="pill eco">${cpw(g).toFixed(2)} €/uso</span>
@@ -493,7 +506,7 @@ function renderFicha(){
   if(track&&dots.length)track.onscroll=()=>{ const i=Math.round(track.scrollLeft/track.clientWidth); dots.forEach((d,j)=>d.className=j===i?'on':''); };
   el.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>openFicha(b.dataset.c));
   el.querySelector('#sale').onclick=()=>{ g.status=onSale?'uso':'venta'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
-  el.querySelector('#wear').onclick=()=>{ g.worn++; g.lastWorn='Hoy'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
+  el.querySelector('#wear').onclick=()=>{ g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
   if(el.querySelector('#sell_wallapop'))el.querySelector('#sell_wallapop').onclick=()=>prepararVenta(g,'wallapop');
   if(el.querySelector('#sell_vinted'))el.querySelector('#sell_vinted').onclick=()=>prepararVenta(g,'vinted');
   el.querySelector('#docfile').addEventListener('change',ev=>{
@@ -1257,7 +1270,6 @@ Máximo 4 faltas.`;
 ═══════════════════════════════════════════ */
 function vInsights(m){
   const dna=computeStyleDNA();
-  const score=computeDrobeScore();
   const total=dna.totalValue||0;
   const dead=store.garments.filter(g=>g.worn<=3);
   const cm={'Blanco':'#E7E3DA','Gris':'#AEB4BA','Negro':'#1F2126','Crudo':'#E9DFC9','Marino':'#2B3A5B','Mostaza':'#C99A3E','Azul':'#4A6FA5','Verde':'#4A7C59','—':'#bbb'};
@@ -1265,20 +1277,8 @@ function vInsights(m){
   m.innerHTML=`<div class="reveal"><div class="eyebrow">Insights</div>
     <div class="title">Tu armario,<br>en datos</div></div>
 
-    <!-- Drobe Score -->
-    <div class="score-card reveal" style="animation-delay:.02s">
-      <div class="sc-left">
-        <div class="sc-num">${score}</div>
-        <div class="sc-label">Drobe Score</div>
-      </div>
-      <div class="sc-right">
-        <div class="sc-bar"><div class="sc-fill" style="width:${score}%"></div></div>
-        <div class="sc-desc">${score>=80?'Armario excelente. Bien amortizado y versátil.':score>=60?'Buen armario. Hay algunas prendas dormidas.':score>=40?'Armario con potencial. Vende lo que no usas.':'Armario con mucho capital dormido.'}</div>
-      </div>
-    </div>
-
     <!-- Stats principales -->
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0" class="reveal" style="animation-delay:.04s">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0" class="reveal" style="animation-delay:.02s">
       <div class="stat"><div class="n">${Math.round(total)} €</div><div class="l">Valor total</div></div>
       <div class="stat"><div class="n">${dead.length}</div><div class="l">Dormidas</div></div>
       <div class="stat"><div class="n">${dna.avgPrice||0} €</div><div class="l">Precio medio</div></div>
@@ -1349,12 +1349,12 @@ function vInsights(m){
         <div class="val"><div class="v" style="color:${cpw(g)>15?'var(--amber)':'var(--eco)'}">${cpw(g).toFixed(2)} €</div><div class="s">por uso</div></div></div>`).join('')}
     </div>`;
 
-  // actualizar DNA en el perfil
+  // actualizar DNA en el perfil (drobe_score se calcula y guarda para uso interno/B2B, sin mostrarse como métrica)
   store.profile=store.profile||{};
   store.profile.style_dna=dna;
-  store.profile.drobe_score=score;
+  store.profile.drobe_score=computeDrobeScore();
   save();
-  if(session) cloud.updateProfile({style_dna:dna,drobe_score:score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(()=>{});
+  if(session) cloud.updateProfile({style_dna:dna,drobe_score:store.profile.drobe_score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(()=>{});
 }
 
 /* ═══════════════════════════════════════════
@@ -1364,13 +1364,12 @@ function vPerfil(m){
   const p=store.profile||{};
   const name=p.name||(session?.user?.email?.split('@')[0])||'Usuario';
   const dna=p.style_dna||computeStyleDNA();
-  const score=p.drobe_score||computeDrobeScore();
   m.innerHTML=`<div class="reveal">
     <div style="display:flex;align-items:center;gap:14px;margin:10px 0 22px">
-      <div style="width:60px;height:60px;border-radius:999px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800">${(name[0]||'U').toUpperCase()}</div>
+      <div style="width:60px;height:60px;border-radius:999px;background:var(--noir);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:26px;font-style:italic">${(name[0]||'U').toUpperCase()}</div>
       <div>
-        <div style="font-size:19px;font-weight:700;letter-spacing:-.02em">${name}</div>
-        <div class="sub" style="margin-top:2px">${store.garments.length} prendas · Score ${score} · ${session?'☁ Sincronizado':'Local'}</div>
+        <div style="font-family:var(--serif);font-size:21px;font-weight:500;font-style:italic;letter-spacing:-.01em">${name}</div>
+        <div class="sub" style="margin-top:2px">${store.garments.length} prendas · ${session?'☁ Sincronizado':'Local'}</div>
       </div>
     </div></div>
 
@@ -1458,7 +1457,7 @@ function renderAuth(slot){
     try{
       const s=await cloud.signInOrUp(em,pw);
       if(s){session=s;await syncFromCloud();render();}
-      else{slot.querySelector('#amsg').innerHTML=`<div class="sub" style="margin-bottom:8px">Revisa tu email para confirmar la cuenta.</div>`;render();}
+      else{slot.querySelector('#amsg').innerHTML=`<div class="note warn" style="margin:10px 0">${svg('spark',16)}<span><b>Confirma tu email para activar la nube.</b> Hasta entonces, lo que añadas se guarda solo en este dispositivo.</span></div>`;render();}
     }catch(e){slot.querySelector('#amsg').innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">${e?.message||'No se pudo iniciar sesión.'}</div>`;render();}
   };
 }
@@ -1548,7 +1547,7 @@ function renderWelcome(mode='intro'){
         }
         await syncFromCloud(); markSeen(); el.remove(); render();
       } else {
-        msg.innerHTML=`<div class="sub" style="margin-bottom:8px">Revisa tu email para confirmar la cuenta.</div>`;
+        msg.innerHTML=`<div class="note warn" style="margin:10px 0">${svg('spark',16)}<span><b>Tu cuenta se creó pero aún no tienes sesión activa.</b> Confirma el email que te ha llegado y vuelve a entrar con tu contraseña. Mientras tanto, si sigues usando la app, tus prendas se guardarán <b>solo en este dispositivo</b> y se perderían si borras los datos del navegador.</span></div>`;
         this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
       }
     }catch(e){
@@ -1588,6 +1587,23 @@ async function syncFromCloud(){
     if(rows===null) return;
   }
   store.garments=rows.map(r=>{ const g=cloud.fromRow(r); g.catGroup=g.catGroup||catToGroup(g.cat||''); g.fit=g.fit||'Regular Fit'; g.colors=g.colors&&g.colors.length?g.colors:[g.color]; g.docs=g.docs||[]; g.photos=g.photos||[]; return g; });
+  // traer el perfil (sexo, edad, consentimientos, ADN guardado) — sin esto la
+  // personalización arranca a ciegas en cada sesión nueva.
+  const profileRow=await cloud.pullProfile();
+  if(profileRow){
+    store.profile={
+      ...store.profile,
+      name: profileRow.name ?? store.profile?.name,
+      age: profileRow.age ?? store.profile?.age,
+      sex: profileRow.sex ?? store.profile?.sex,
+      consent_data_b2b: profileRow.consent_data_b2b ?? store.profile?.consent_data_b2b,
+      consent_analytics: profileRow.consent_analytics ?? store.profile?.consent_analytics,
+      consent_marketing: profileRow.consent_marketing ?? store.profile?.consent_marketing,
+      measures: profileRow.measures ?? store.profile?.measures,
+      style_dna: profileRow.style_dna ?? store.profile?.style_dna,
+      drobe_score: profileRow.drobe_score ?? store.profile?.drobe_score
+    };
+  }
   save();
   render();
 }
