@@ -54,6 +54,15 @@ module.exports = async function handler(req, res) {
     const m=String(str).replace(/\./g,'').replace(',','.').match(/(\d+(\.\d+)?)/);
     return m?parseFloat(m[1]):null;
   }
+  function bestLink(p){
+    // 1) link directo a la tienda (no la URL interna de Google que caduca)
+    const direct = p.link || (p.merchant && p.merchant.link) || '';
+    const isGoogleInternal = /google\.[^/]+\/(shopping|search|aclk|url)/i.test(direct) || /google\.[^/]+\/.*prds=/i.test(direct);
+    if(direct && !isGoogleInternal) return direct;
+    // 2) fallback: búsqueda de Google Shopping por título (siempre resuelve)
+    const q = [p.source, p.title].filter(Boolean).join(' ');
+    return 'https://www.google.com/search?tbm=shop&q=' + encodeURIComponent(q || p.title || '');
+  }
   function mapItem(p) {
     const pv = typeof p.extracted_price === 'number' ? p.extracted_price : parsePrice(p.price);
     return {
@@ -61,7 +70,7 @@ module.exports = async function handler(req, res) {
       price: p.price || (pv?pv+' €':null),
       price_value: pv,
       source: p.source || '',
-      link: p.product_link || p.link || '',
+      link: bestLink(p),
       thumbnail: p.thumbnail || '',
       rating: p.rating || null,
       reviews: p.reviews || null
