@@ -54,17 +54,47 @@ module.exports = async function handler(req, res) {
     const m=String(str).replace(/\./g,'').replace(',','.').match(/(\d+(\.\d+)?)/);
     return m?parseFloat(m[1]):null;
   }
+  // link directo a la TIENDA (no Google), si SerpApi ya lo trae
+  function storeDirect(p){
+    const cand = p.link || (p.merchant && p.merchant.link) || '';
+    if(!cand) return null;
+    return /google\.[^/]+\//i.test(cand) ? null : cand;
+  }
+  // mejor enlace disponible: tienda directa > ficha del producto en Google > búsqueda
   function bestLink(p){
-    // 1) link directo a la tienda (no la URL interna de Google que caduca)
-    const direct = p.link || (p.merchant && p.merchant.link) || '';
-    const isGoogleInternal = /google\.[^/]+\/(shopping|search|aclk|url)/i.test(direct) || /google\.[^/]+\/.*prds=/i.test(direct);
-    if(direct && !isGoogleInternal) return direct;
-    // 2) fallback: búsqueda de Google Shopping por título (siempre resuelve)
-    const q = [p.source, p.title].filter(Boolean).join(' ');
-    return 'https://www.google.com/search?tbm=shop&q=' + encodeURIComponent(q || p.title || '');
+    return storeDirect(p)
+      || p.product_link
+      || ('https://www.google.com/search?tbm=shop&q=' + encodeURIComponent([p.source,p.title].filter(Boolean).join(' ') || p.title || ''));
+  }
+  // 2ª llamada: resuelve el enlace directo del vendedor (va a la web de la tienda, sin 404)
+  async function directSellerLink(productId){
+    if(!productId) return null;
+    try{
+      const url = 'https://serpapi.com/search.json?engine=google_product&product_id=' + encodeURIComponent(productId) + '&gl=' + country + '&hl=es&api_key=' + key;
+      const r = await fetch(url);
+      const d = await r.json();
+      const sellers = (d.sellers_results && d.sellers_results.online_sellers) || [];
+      if(!sellers.length) return null;
+      sellers.sort((a,b)=>(parsePrice(a.total_price||a.base_price)||1e9)-(parsePrice(b.total_price||b.base_price)||1e9));
+      const s = sellers.find(x=>x.link);
+      return s ? s.link : null;
+    }catch(e){ return null; }
+  }
+  // enriquece con enlace directo a tienda. Limita nº de 2ª llamadas para no quemar cuota.
+  async function enrichDirect(items, maxCalls){
+    let used = 0;
+    for(const it of items){
+      if(it._needsDirect && it._pid && used < maxCalls){
+        used++;
+        const dl = await directSellerLink(it._pid);
+        if(dl) it.link = dl;
+      }
+      delete it._needsDirect; delete it._pid;
+    }
   }
   function mapItem(p) {
     const pv = typeof p.extracted_price === 'number' ? p.extracted_price : parsePrice(p.price);
+    const direct = storeDirect(p);
     return {
       title: p.title,
       price: p.price || (pv?pv+' €':null),
@@ -73,7 +103,9 @@ module.exports = async function handler(req, res) {
       link: bestLink(p),
       thumbnail: p.thumbnail || '',
       rating: p.rating || null,
-      reviews: p.reviews || null
+      reviews: p.reviews || null,
+      _pid: p.product_id || null,
+      _needsDirect: !direct  // si no hay link directo a tienda, intentaremos resolverlo
     };
   }
 
@@ -159,11 +191,17 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    const exactOut = exact.slice(0, 5);
+    const altOut = alternatives.slice(0, 5);
+    // resolver enlaces directos a tienda (máx 3 exact + 2 alt = 5 llamadas extra/escaneo)
+    await enrichDirect(exactOut, 3);
+    await enrichDirect(altOut, 2);
+
     res.status(200).json({
       available: true,
-      exact: exact.slice(0, 5),
-      alternatives: alternatives.slice(0, 5),
-      results: exact.slice(0, 5),
+      exact: exactOut,
+      alternatives: altOut,
+      results: exactOut,
       debug: { serpapi_error: lastError, exact_found: exact.length, alt_found: alternatives.length }
     });
   } catch(e) {
