@@ -3,8 +3,27 @@
 // Hace búsqueda de la MISMA marca + ALTERNATIVAS más baratas similares.
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
   const key = process.env.SERPAPI_KEY;
+
+  // MODO DIAGNÓSTICO: GET /api/shopping?debug=1&q=ecoalf pantalon
+  if (req.method === 'GET') {
+    if (!key) { res.status(200).json({ ok:false, reason:'SERPAPI_KEY no configurada' }); return; }
+    const q = (req.query && req.query.q) || 'ecoalf pantalon lino azul';
+    try {
+      const url = 'https://serpapi.com/search.json?engine=google_shopping&q=' + encodeURIComponent(q) + '&gl=es&hl=es&api_key=' + key;
+      const r = await fetch(url);
+      const data = await r.json();
+      res.status(200).json({
+        ok: true, query: q, http_status: r.status,
+        serpapi_error: data.error || null,
+        results_count: (data.shopping_results || []).length,
+        first_3: (data.shopping_results || []).slice(0,3).map(p => ({ title:p.title, price:p.price, source:p.source, link: p.product_link||p.link||null, thumb: !!p.thumbnail }))
+      });
+    } catch(e) { res.status(200).json({ ok:false, reason:e.message }); }
+    return;
+  }
+
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
   if (!key) { res.status(200).json({ available: false, reason: 'no_key' }); return; }
 
   let body = req.body;
