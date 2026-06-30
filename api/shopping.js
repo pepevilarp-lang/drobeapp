@@ -75,8 +75,33 @@ module.exports = async function handler(req, res) {
     const simpleQuery = brand && productType ? brand + ' ' + productType : exactQuery;
     const altQuery = productType || query;
     const brandLC = (brand||'').toLowerCase();
+    const qLC = (query||'').toLowerCase();
 
-    // descartar precios irrisorios (ruido de marketplaces) — menos de 8€ en ropa = sospechoso
+    // Detectar el TIPO de prenda principal de la búsqueda para no confundir
+    // categorías parecidas (camisa vs camiseta, pantalón vs short, etc.)
+    const TYPE_RULES = [
+      {key:'camiseta', has:/camiseta|t-shirt|tee/, not:/camisa\b/},
+      {key:'camisa',   has:/\bcamisa\b/,           not:/camiseta/},
+      {key:'sudadera', has:/sudadera|hoodie/,      not:/camiseta/},
+      {key:'jersey',   has:/jersey|punto|knit/,    not:/camiseta/},
+      {key:'pantalon', has:/pantal[oó]n|vaquero|jean|chino/, not:/short|bermuda/},
+      {key:'short',    has:/short|bermuda/,        not:/pantal[oó]n largo/},
+      {key:'abrigo',   has:/abrigo|parka|plumífero|gabardina/, not:/camiseta/},
+      {key:'chaqueta', has:/chaqueta|bomber|blazer|americana/, not:/camiseta/},
+      {key:'zapato',   has:/zapato|sneaker|bota|zapatilla|deportiv/, not:/camiseta/},
+      {key:'vestido',  has:/vestido/,              not:/camiseta/},
+      {key:'falda',    has:/falda/,                not:/camiseta/}
+    ];
+    // ¿qué tipo buscó el usuario?
+    const wantedType = TYPE_RULES.find(t => t.has.test(qLC) || t.has.test((altQuery||'').toLowerCase()));
+    // ¿el producto coincide con el tipo buscado y NO es el tipo confundible?
+    const matchesType = p => {
+      if(!wantedType) return true; // sin tipo claro, no filtramos
+      const t=(p.title||'').toLowerCase();
+      return wantedType.has.test(t) && !wantedType.not.test(t);
+    };
+
+    // descartar precios irrisorios (ruido de marketplaces)
     const validPrice = p => !p.price_value || p.price_value >= 8;
     // pertenece a la marca buscada (en título o en source/tienda)
     const matchesBrand = p => brandLC && (
@@ -88,21 +113,21 @@ module.exports = async function handler(req, res) {
     let exact = [];
     if (brand) {
       let raw = await serpSearch(exactQuery);
-      exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p));
+      exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p));
       // si la query con color no da, reintentar con marca + tipo
       if (!exact.length && simpleQuery !== exactQuery) {
         raw = await serpSearch(simpleQuery);
-        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p));
+        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p));
       }
       // último intento: buscar solo la marca + primera palabra del tipo
       if (!exact.length && altQuery) {
         raw = await serpSearch(brand + ' ' + altQuery.split(' ')[0]);
-        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p));
+        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p));
       }
     } else {
       // sin marca: la query tal cual
       const raw = await serpSearch(exactQuery);
-      exact = raw.map(mapItem).filter(p => p.title && validPrice(p));
+      exact = raw.map(mapItem).filter(p => p.title && validPrice(p) && matchesType(p));
     }
     exact.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
 
@@ -113,7 +138,7 @@ module.exports = async function handler(req, res) {
       const altRaw = await serpSearch(genericQuery);
       const isOwned = p => ownedBrands.some(b => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()));
       const baseAlt = altRaw.map(mapItem)
-        .filter(p => p.title && validPrice(p))
+        .filter(p => p.title && validPrice(p) && matchesType(p))
         .filter(p => !brandLC || !( (p.title||'').toLowerCase().includes(brandLC) || (p.source||'').toLowerCase().includes(brandLC) ));
       // preferir más baratas que la de referencia
       alternatives = baseAlt.filter(p => !maxPrice || !p.price_value || p.price_value < maxPrice * 0.95);
