@@ -2169,6 +2169,7 @@ async function initCloud(){
 }
 async function syncFromCloud(){
   if(!session)return;
+  await cloud.ensureProfile(); // garantizar FK antes de cualquier escritura
   let rows=await cloud.pullGarments();
   if(rows===null) return; // error de red: conservar lo local, no tocar nada
   // merge: subir cualquier prenda local que no esté ya en la nube
