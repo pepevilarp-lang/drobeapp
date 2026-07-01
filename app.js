@@ -53,6 +53,14 @@ const IC = {
   target:'M12 22a10 10 0 100-20 10 10 0 000 20zM12 18a6 6 0 100-12 6 6 0 000 12zM12 14a2 2 0 100-4 2 2 0 000 4z',
   lock:'M5 11V7a7 7 0 0114 0v4M3 11h18v10H3z',
   gift:'M20 12v10H4V12M22 7H2v5h20V7zM12 22V7M12 7a5 2.5 0 010-5 5 2.5 0 010 5zM12 7a5 2.5 0 000-5 5 2.5 0 000 5',
+  sync:'M4 12a8 8 0 0113.7-5.7L20 8M20 4v4h-4M20 12a8 8 0 01-13.7 5.7L4 16M4 20v-4h4',
+  trash:'M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13',
+  people:'M9 12.5a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4zM2.5 20a6.5 6.5 0 0113 0M16 6.2a3.2 3.2 0 010 6.2M18 20a6.5 6.5 0 00-3-5.3',
+  chat:'M4 5h16v11H9l-4 4V5z',
+  send:'M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z',
+  heart:'M12 21C6 16.5 3 13 3 9a4.5 4.5 0 019-1 4.5 4.5 0 019 1c0 4-3 7.5-9 12z',
+  search:'M11 4a7 7 0 105.2 11.7L21 20M11 4a7 7 0 015.2 11.7',
+  hanger:'M12 5a2 2 0 112 2c-1 0-1.5.6-1.5 1.3 0 .5.3.9.8 1.2L21 14H3l7.7-4.2',
 };
 const svg = (n,s,w) => {
   s=s||22; w=w||1.7;
@@ -102,8 +110,8 @@ const SEED = [
 const KEY = 'drobe.v3';
 let store = load();
 function load(){
-  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];return s;}} }catch(e){}
-  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[]};
+  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];s.tickets=s.tickets||[];return s;}} }catch(e){}
+  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[]};
 }
 function save(){ try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){} }
 function showSyncWarning(reason){
@@ -265,30 +273,32 @@ function optSel(opts,val){ return (val&&!opts.includes(val)?`<option selected>${
 /* ═══════════════════════════════════════════
    FORMULARIO PRENDA
 ═══════════════════════════════════════════ */
-function garmentFormHTML(p={},c={}){
+function garmentFormHTML(p={},c={},pre='f_'){
+  const isTicket=pre!=='f_';
   return `
-  <div class="field"><label>Marca ${c.brand!=null?confBadge(c.brand):''}</label><input id="f_brand" value="${esc(p.brand)}" placeholder="Nike, Zara, Stone Island…"/></div>
-  <div class="field"><label>Nombre / modelo ${c.name!=null?confBadge(c.name):''}</label><input id="f_name" value="${esc(p.name)}" placeholder="Parka técnica negra"/></div>
+  <div class="field"><label>Marca ${c.brand!=null?confBadge(c.brand):''}</label><input id="${pre}brand" value="${esc(p.brand)}" placeholder="Nike, Zara, Stone Island…"/></div>
+  <div class="field"><label>Nombre / modelo ${c.name!=null?confBadge(c.name):''}</label><input id="${pre}name" value="${esc(p.name)}" placeholder="Parka técnica negra"/></div>
   <div class="row2">
-    <div class="field"><label>Tipo ${c.cat!=null?confBadge(c.cat):''}</label><select id="f_cat">${optSel(CATS_DETAIL,p.cat||p.category)}</select></div>
-    <div class="field"><label>Corte ${c.fit!=null?confBadge(c.fit):''}</label><select id="f_fit">${optSel(FITS,p.fit)}</select></div>
+    <div class="field"><label>Tipo ${c.cat!=null?confBadge(c.cat):''}</label><select id="${pre}cat">${optSel(CATS_DETAIL,p.cat||p.category)}</select></div>
+    <div class="field"><label>Corte ${c.fit!=null?confBadge(c.fit):''}</label><select id="${pre}fit">${optSel(FITS,p.fit)}</select></div>
   </div>
   <div class="row2">
-    <div class="field"><label>Color ${c.color!=null?confBadge(c.color):''}</label><input id="f_color" value="${esc((p.colors&&p.colors[0])||p.color)}" placeholder="Verde oliva"/></div>
-    <div class="field"><label>Material ${c.material!=null?confBadge(c.material):''}</label><input id="f_mat" value="${esc(p.material)}" placeholder="Poliéster reciclado"/></div>
+    <div class="field"><label>Color ${c.color!=null?confBadge(c.color):''}</label><input id="${pre}color" value="${esc((p.colors&&p.colors[0])||p.color)}" placeholder="Verde oliva"/></div>
+    <div class="field"><label>Material ${c.material!=null?confBadge(c.material):''}</label><input id="${pre}mat" value="${esc(p.material)}" placeholder="Poliéster reciclado"/></div>
   </div>
   <div class="row2">
-    <div class="field"><label>Talla</label><input id="f_size" value="${esc(p.size)}" placeholder="M"/></div>
-    <div class="field"><label>Precio €</label><input id="f_price" inputmode="decimal" value="${esc(p.price)}" placeholder="0"/></div>
+    <div class="field"><label>Talla</label><input id="${pre}size" value="${esc(p.size)}" placeholder="M"/></div>
+    <div class="field"><label>Precio €</label><input id="${pre}price" inputmode="decimal" value="${esc(p.price)}" placeholder="0"/></div>
   </div>
   <div class="row2">
-    <div class="field"><label>Temporada</label><select id="f_season">${optSel(SEASONS,p.season)}</select></div>
-    <div class="field"><label>Formalidad</label><select id="f_form">${optSel(FORMS,p.formality)}</select></div>
+    <div class="field"><label>Temporada</label><select id="${pre}season">${optSel(SEASONS,p.season)}</select></div>
+    <div class="field"><label>Formalidad</label><select id="${pre}form">${optSel(FORMS,p.formality)}</select></div>
   </div>
-  <div class="row2">
-    <div class="field"><label>Estado</label><select id="f_cond">${optSel(CONDS,p.cond||'Como nuevo')}</select></div>
-    <div class="field"><label>Tienda</label><input id="f_store" value="${esc(p.store)}" placeholder="Ecoalf.com"/></div>
-  </div>`;
+  ${isTicket?`<div class="field"><label>Estado</label><select id="${pre}cond">${optSel(CONDS,p.cond||'Nuevo con etiqueta')}</select></div>`
+  :`<div class="row2">
+    <div class="field"><label>Estado</label><select id="${pre}cond">${optSel(CONDS,p.cond||'Como nuevo')}</select></div>
+    <div class="field"><label>Tienda</label><input id="${pre}store" value="${esc(p.store)}" placeholder="Ecoalf.com"/></div>
+  </div>`}`;
 }
 function readForm(scope){
   const q=id=>{ const e=scope.querySelector('#'+id); return e?e.value.trim():''; };
@@ -369,10 +379,11 @@ REGLAS CRÍTICAS:
 
 const TICKET_SYSTEM=`Eres un sistema OCR especializado en tickets de tiendas de moda.
 REGLAS:
-- No inventes. Si un dato no se ve claramente, baja la confianza.
-- "cat" DEBE estar en español y ser uno de: ${CATS_DETAIL.join(', ')}. Traduce: T-SHIRT→Camiseta manga corta, PANTS→Pantalón vestir, JEANS→Vaquero, SHIRT→Camisa Oxford, SWEATER→Jersey, HOODIE→Hoodie, JACKET→Bomber, COAT→Abrigo, SHOES→Sneakers.
+- No inventes. Si un dato no se ve claramente, baja la confianza (0-1) y deja el campo vacío.
+- "cat" DEBE estar en español y ser uno de: ${CATS_DETAIL.join(', ')}. Traduce del inglés si hace falta: T-SHIRT→Camiseta manga corta, PANTS/TROUSERS→Pantalón vestir, LINEN TROUSERS→Pantalón lino, JEANS→Vaquero, CHINO→Chino, SHIRT→Camisa Oxford, SWEATER/KNIT→Jersey, HOODIE→Hoodie, JACKET→Bomber, COAT→Abrigo, SHOES/SNEAKERS→Sneakers, SHORTS→Shorts. Fíjate bien en la descripción para no confundir camiseta con camisa, ni pantalón con short.
+- "dateISO" en formato AAAA-MM-DD si puedes deducirla del ticket.
 - "sku" es el número de referencia/artículo si aparece.
-Responde SOLO JSON: {"store":"","date":"","total":0,"items":[{"name":"","brand":"","sku":"","price":0,"cat":"","confidence":0}]}`;
+Responde SOLO JSON: {"store":"","date":"","dateISO":"","total":0,"items":[{"name":"","brand":"","sku":"","price":0,"cat":"","confidence":0}]}`;
 
 /* ═══════════════════════════════════════════
    ROUTER
@@ -390,7 +401,12 @@ const TABS=[
 function go(r){ if(r!==route)unmountWardrobe3D(); route=r; render(); window.scrollTo(0,0); }
 function render(){
   app.innerHTML=`<div class="shell">
-    <div class="top"><div class="word">Dro<b>be</b></div><button class="ico">${svg('bell',19)}</button></div>
+    <div class="top"><div class="word">Dro<b>be</b></div>
+      <div style="display:flex;gap:8px">
+        <button class="ico" id="top_social" style="position:relative">${svg('people',19)}<span class="unread-dot" id="unread_dot" style="display:none"></span></button>
+        <button class="ico">${svg('bell',19)}</button>
+      </div>
+    </div>
     <main id="main" class="fade"></main>
     <div class="nav"><div class="nav-in">
       ${TABS.map(t=>{ const on=route===t.k,add=t.k==='add';
@@ -399,6 +415,8 @@ function render(){
   const m=document.getElementById('main');
   ({armario:vArmario,estilista:vEstilista,add:vAdd,insights:vInsights,perfil:vPerfil}[route]||vArmario)(m);
   app.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>go(b.dataset.t));
+  const social=document.getElementById('top_social'); if(social)social.onclick=()=>openSocial();
+  if(session)refreshUnread();
   if(fichaId)renderFicha();
 }
 
@@ -682,24 +700,164 @@ function normalizeCat(cat=''){
 }
 
 function showTicket(m,r,img){
-  if(!r||!r.items?.length)r={store:'Tienda',date:'Hoy',items:[{name:'Prenda detectada',brand:'',price:0,cat:'Camiseta manga corta',confidence:.5}]};
-  r.items.forEach(it=>{ it.cat=normalizeCat(it.cat); });
-  const doc={type:'Ticket',icon:'receipt',name:`Ticket ${r.store||''}.jpg`,dt:r.date||'Hoy',url:img.dataUrl};
+  if(!r||!r.items?.length)r={store:'',date:'',items:[{name:'',brand:'',price:0,cat:'',confidence:.5}]};
+  r.items.forEach(it=>{ it.cat=normalizeCat(it.cat||''); });
   const stage=m.querySelector('#stage');
+  const today=new Date().toISOString().slice(0,10);
   stage.innerHTML=`
-    <div class="note" style="margin-bottom:14px">${svg('receipt',18)}<span><b>${r.store||'Ticket'}</b>${r.date?' · '+r.date:''} · ${r.items.length} prenda(s) · ${r.total?r.total+'€':''}. Todas quedan enlazadas al ticket original.</span></div>
-    ${r.items.map((it,i)=>{const low=(it.confidence||1)<0.75;return `<div class="conf${low?' low':''}" style="animation-delay:${i*0.07}s">
-      <span class="k">${it.brand||'Prenda'}</span>
-      <span class="vv">${it.cat} · ${it.price||0} €</span>
-      ${stars(it.confidence||0.5)} ${confBadge(it.confidence||0.5)}</div>`;}).join('')}
-    <button class="btn dark" id="conf" style="margin-top:14px">${svg('add',18,2)} Añadir ${r.items.length} al armario</button>`;
-  stage.querySelector('#conf').onclick=()=>{
-    r.items.forEach(it=>{
-      addGarment({brand:it.brand||'—',name:it.name||it.cat,cat:it.cat,catGroup:catToGroup(it.cat),fit:'Regular Fit',color:'—',colors:['—'],material:'',size:'',season:'Todo el año',formality:'Casual',bought:r.date||'Hoy',store:r.store||'',price:it.price||0,cond:'Nuevo con etiqueta',worn:0,lastWorn:'—',status:'uso',img:'./assets/silbon-raquetas-white.png',photos:[],docs:[{...doc}],tags:[],sku:it.sku||''});
-      trackPurchaseEvent({brand:it.brand,cat:it.cat,price:it.price,store:r.store,channel:'physical',sku:it.sku});
+    <div class="note" style="margin-bottom:14px">${svg('receipt',18)}<span>He leído el ticket. <b>Revisa y corrige</b> lo que no haya detectado bien antes de guardar — no invento nada.</span></div>
+    ${img?`<div class="scanimg"><img src="${img.dataUrl}"/></div>`:''}
+
+    <div class="shead"><h2>Datos del ticket</h2></div>
+    <div class="row2">
+      <div class="field"><label>Tienda / Marca</label><input id="t_store" value="${esc(r.store||'')}" placeholder="Ecoalf"/></div>
+      <div class="field"><label>Fecha de compra</label><input id="t_date" type="date" value="${r.dateISO||today}"/></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Total (€)</label><input id="t_total" inputmode="decimal" value="${r.total||''}" placeholder="—"/></div>
+      <div class="field"><label>Días para devolver</label><input id="t_return" inputmode="numeric" value="${r.returnDays||30}" placeholder="30"/></div>
+    </div>
+    <div class="field"><label>Garantía (meses, opcional)</label><input id="t_warranty" inputmode="numeric" value="${r.warrantyMonths||''}" placeholder="Ej. 24 para calzado/electrónica"/></div>
+
+    <div class="shead"><h2>Prendas del ticket · ${r.items.length}</h2></div>
+    <div id="t_items">
+      ${r.items.map((it,i)=>`<div class="titem" data-i="${i}">
+        <div class="titem-head">Prenda ${i+1}<button class="titem-del" data-del="${i}">${svg('trash',15)}</button></div>
+        ${garmentFormHTML({brand:it.brand||'',name:it.name||'',cat:it.cat||'',price:it.price||0,color:'',material:'',size:'',fit:'Regular Fit',season:'Todo el año',formality:'Casual',cond:'Nuevo con etiqueta'}, it.confidence?{}:{},'ti'+i+'_')}
+      </div>`).join('')}
+    </div>
+    <button class="btn ghost" id="t_add" style="margin-bottom:14px">${svg('add',16)} Añadir otra prenda del ticket</button>
+    <button class="btn dark" id="conf">${svg('add',18,2)} Guardar ticket y prendas</button>`;
+
+  const rebuildDel=()=>stage.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
+    const items=stage.querySelectorAll('.titem'); if(items.length<=1)return;
+    b.closest('.titem').remove();
+  });
+  rebuildDel();
+  stage.querySelector('#t_add').onclick=()=>{
+    const wrap=stage.querySelector('#t_items'); const i=wrap.querySelectorAll('.titem').length;
+    const div=document.createElement('div'); div.className='titem'; div.dataset.i=i;
+    div.innerHTML=`<div class="titem-head">Prenda ${i+1}<button class="titem-del" data-del="${i}">${svg('trash',15)}</button></div>`+
+      garmentFormHTML({fit:'Regular Fit',season:'Todo el año',formality:'Casual',cond:'Nuevo con etiqueta'},{},'ti'+i+'_');
+    wrap.appendChild(div); rebuildDel();
+  };
+
+  stage.querySelector('#conf').onclick=async ()=>{
+    const store_=stage.querySelector('#t_store').value.trim();
+    const dateISO=stage.querySelector('#t_date').value||today;
+    const total=parseFloat(stage.querySelector('#t_total').value)||0;
+    const returnDays=parseInt(stage.querySelector('#t_return').value)||0;
+    const warrantyMonths=parseInt(stage.querySelector('#t_warranty').value)||0;
+    const ticketId='t'+Date.now()+Math.random().toString(36).slice(2,5);
+
+    // guardar imagen del ticket en Storage (si hay sesión); si no, queda en local
+    let ticketImgUrl=img?.dataUrl||null;
+    if(session && img?.dataUrl){
+      const up=await cloud.uploadTicketImage(ticketId,img.dataUrl).catch(()=>null);
+      if(up&&up.url)ticketImgUrl=up.url;
+    }
+
+    // leer cada prenda del formulario
+    const items=[]; const garmentIds=[];
+    stage.querySelectorAll('.titem').forEach(node=>{
+      const pre='ti'+node.dataset.i+'_';
+      const d=readFormPrefixed(node,pre);
+      if(!d.cat && !d.brand && !d.name) return; // vacía, ignorar
+      const gid='g'+Date.now()+Math.random().toString(36).slice(2,6);
+      garmentIds.push(gid);
+      const g={id:gid,brand:d.brand||'—',name:d.name||d.cat||'Prenda',cat:d.cat||'Otro',catGroup:catToGroup(d.cat||''),
+        fit:d.fit||'Regular Fit',color:d.color||'—',colors:[d.color||'—'],material:d.material||'',size:d.size||'',
+        season:d.season||'Todo el año',formality:d.formality||'Casual',bought:dateISO,store:store_,price:parseFloat(d.price)||0,
+        cond:d.cond||'Nuevo con etiqueta',worn:0,lastWorn:'—',status:'uso',img:ticketImgUrl||'./assets/silbon-raquetas-white.png',
+        photos:[],docs:[],tags:[],sku:'',ticketId};
+      store.garments.unshift(g); save();
+      if(session) cloud.pushGarment(g).then(res=>{ if(res&&!res.ok) showSyncWarning(res.reason); });
+      items.push({brand:g.brand,cat:g.cat,price:g.price});
+      trackPurchaseEvent({brand:g.brand,cat:g.cat,price:g.price,store:store_,channel:'physical'});
     });
+
+    // guardar el ticket
+    const ticket={id:ticketId,store:store_,dateISO,total:total||items.reduce((s,x)=>s+(x.price||0),0),
+      returnDays,warrantyMonths,img:ticketImgUrl,garmentIds,items,createdAt:new Date().toISOString()};
+    saveTicket(ticket);
+
     addMode='choose'; go('armario');
   };
+}
+
+// lee un formulario de prenda con prefijo en los ids (para varios en la misma pantalla)
+function readFormPrefixed(scope,pre){
+  const q=id=>{ const e=scope.querySelector('#'+pre+id); return e?e.value.trim():''; };
+  return {brand:q('brand'),name:q('name'),cat:q('cat'),fit:q('fit'),color:q('color'),material:q('mat'),
+    size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond')};
+}
+
+function saveTicket(t){
+  store.tickets=store.tickets||[];
+  store.tickets.unshift(t);
+  save();
+  if(session) cloud.saveTicketCloud(t).then(r=>{ if(r&&!r.ok) showSyncWarning(r.reason); });
+}
+function deleteTicket(id){
+  store.tickets=(store.tickets||[]).filter(t=>t.id!==id);
+  save();
+  if(session) cloud.deleteTicketCloud(id);
+}
+
+let ticketSort='date';
+function openTickets(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='tickets-view';
+  renderTicketsView(el);
+  document.body.appendChild(el);
+}
+function fmtDate(iso){ if(!iso)return '—'; const d=new Date(iso); if(isNaN(d))return iso; return d.toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'}); }
+function returnStatus(t){
+  if(!t.returnDays||!t.dateISO)return null;
+  const limit=new Date(t.dateISO); limit.setDate(limit.getDate()+t.returnDays);
+  const days=Math.ceil((limit-Date.now())/86400000);
+  if(days<0)return {txt:'Plazo de cambio vencido',cls:'off',limit};
+  if(days<=7)return {txt:`Últimos ${days} día(s) para cambiar`,cls:'urgent',limit};
+  return {txt:`Cambio hasta ${fmtDate(limit.toISOString())}`,cls:'ok',limit};
+}
+function renderTicketsView(el){
+  const tickets=(store.tickets||[]).slice();
+  let groups;
+  if(ticketSort==='store'){
+    const by={}; tickets.forEach(t=>{const k=t.store||'Sin tienda';(by[k]=by[k]||[]).push(t);});
+    groups=Object.keys(by).sort().map(k=>({title:k,items:by[k]}));
+  } else {
+    tickets.sort((a,b)=>(b.dateISO||'').localeCompare(a.dateISO||''));
+    groups=[{title:null,items:tickets}];
+  }
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="tvb">${svg('back',20)}</button><span class="t">Tickets y garantías</span></div>
+    <div class="viewseg" style="margin-bottom:16px">
+      <button class="vseg ${ticketSort==='date'?'on':''}" data-sort="date">Cronológico</button>
+      <button class="vseg ${ticketSort==='store'?'on':''}" data-sort="store">Por tienda</button>
+    </div>
+    ${tickets.length?'':`<div class="empty" style="padding-top:50px">${svg('receipt',28)}<div style="margin-top:12px">Aún no has escaneado tickets.<br>Escanea uno desde el botón + · Escanear ticket.</div></div>`}
+    ${groups.map(g=>`${g.title?`<div class="tk-group">${esc(g.title)}</div>`:''}${g.items.map(t=>{
+      const rs=returnStatus(t);
+      const warranty=t.warrantyMonths?(()=>{const w=new Date(t.dateISO);w.setMonth(w.getMonth()+t.warrantyMonths);return `Garantía hasta ${fmtDate(w.toISOString())}`;})():null;
+      return `<div class="tk-card" data-id="${t.id}">
+        ${t.img?`<div class="tk-thumb"><img src="${esc(t.img)}"/></div>`:`<div class="tk-thumb ph">${svg('receipt',22)}</div>`}
+        <div class="tk-body">
+          <div class="tk-store">${esc(t.store||'Ticket')}</div>
+          <div class="tk-meta">${fmtDate(t.dateISO)} · ${(t.items||[]).length} prenda(s) · ${Math.round(t.total||0)}€</div>
+          ${rs?`<div class="tk-badge ${rs.cls}">${svg('spark',12)} ${rs.txt}</div>`:''}
+          ${warranty?`<div class="tk-badge ok" style="margin-top:4px">${svg('check',12)} ${warranty}</div>`:''}
+        </div>
+        <button class="tk-del" data-del="${t.id}">${svg('trash',16)}</button>
+      </div>`;}).join('')}`).join('')}
+  </div>`;
+  el.querySelector('#tvb').onclick=()=>el.remove();
+  el.querySelectorAll('[data-sort]').forEach(b=>b.onclick=()=>{ ticketSort=b.dataset.sort; renderTicketsView(el); });
+  el.querySelectorAll('[data-del]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteTicket(b.dataset.del); renderTicketsView(el); });
+  el.querySelectorAll('.tk-card').forEach(c=>c.onclick=()=>{ const t=(store.tickets||[]).find(x=>x.id===c.dataset.id); if(t&&t.img)openTicketImage(t.img); });
+}
+function openTicketImage(url){
+  const ov=document.createElement('div'); ov.className='tk-lightbox'; ov.innerHTML=`<img src="${esc(url)}"/>`;
+  ov.onclick=()=>ov.remove(); document.body.appendChild(ov);
 }
 
 function catToGroup(cat=''){
@@ -1182,9 +1340,9 @@ async function searchOffers(query){
     const d=await r.json(); return d&&d.available?d.results||[]:null;
   }catch(e){ return null; }
 }
-async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands,sex}){
+async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands,sex,channel}){
   try{
-    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands,sex})});
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands,sex,channel})});
     const d=await r.json();
     if(!d||!d.available)return null;
     return {exact:d.exact||[],alternatives:d.alternatives||[]};
@@ -1310,13 +1468,24 @@ Devuelve SOLO JSON: {"resumen":"1 frase sobre su armario y su estilo","faltas":[
     out.querySelectorAll('.gap').forEach(g=>g.querySelector('.gap-btn').onclick=async function(){
       const q=g.dataset.q, ptype=g.dataset.type;
       this.disabled=true; this.innerHTML=`${svg('load',16)} …`; this.querySelector('svg').classList.add('spin');
-      // búsqueda con perfil: prioriza marcas del usuario y su sexo
-      const res=await searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:u.avgPrice?Math.round(u.avgPrice*1.6):null});
       let box=g.querySelector('.gap-offers'); if(!box){box=document.createElement('div');box.className='gap-offers';g.after(box);}
-      const items=res?[...(res.exact||[]),...(res.alternatives||[])]:null;
-      if(res===null)box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY para ver ofertas reales.</span></div>`;
-      else if(items&&items.length)box.innerHTML=items.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
-      else box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Sin resultados para tu perfil.</span></div>`;
+      box.innerHTML=`<div class="note" style="margin:8px 0">${svg('load',16)}<span>Buscando según tu estilo…</span></div>`;
+      const maxP=u.avgPrice?Math.round(u.avgPrice*1.6):null;
+      // dos canales en paralelo: tiendas nuevas y segunda mano, ambos con el perfil
+      const [nuevo,used]=await Promise.all([
+        searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP,channel:'new'}),
+        searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP,channel:'used'})
+      ]);
+      if(nuevo===null&&used===null){box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY para ver ofertas reales.</span></div>`;this.disabled=false;this.innerHTML=`${svg('tag',16)} Buscar`;return;}
+      const offerRow=o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`;
+      const nItems=nuevo?[...(nuevo.exact||[]),...(nuevo.alternatives||[])]:[];
+      const uItems=used?[...(used.exact||[]),...(used.alternatives||[])]:[];
+      let html='';
+      html+=`<div class="chan-head">${svg('tag',15)} Nuevo en tiendas</div>`;
+      html+= nItems.length?nItems.slice(0,4).map(offerRow).join(''):`<div class="chan-empty">Sin resultados nuevos para tu perfil.</div>`;
+      html+=`<div class="chan-head" style="margin-top:14px">${svg('sync',15)} Segunda mano</div>`;
+      html+= uItems.length?uItems.slice(0,4).map(offerRow).join(''):`<div class="chan-empty">Sin resultados de segunda mano ahora mismo.</div>`;
+      box.innerHTML=html;
       this.disabled=false; this.innerHTML=`${svg('tag',16)} Buscar`;
     });
   });
@@ -1430,6 +1599,20 @@ function vPerfil(m){
       </div>
     </div></div>
 
+    <button class="opt" id="p_tickets" style="margin-bottom:12px">
+      <span class="ring">${svg('receipt',22)}</span>
+      <div><div class="t1">Tickets y garantías</div><div class="t2">${(store.tickets||[]).length} ticket(s) · plazos de cambio</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+    ${(store.maletas||[]).length?`<button class="opt" id="p_maletas" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pack',22)}</span>
+      <div><div class="t1">Mis maletas</div><div class="t2">${store.maletas.length} guardada(s)</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>`:''}
+
+    <button class="opt" id="p_tour" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('spark',22)}</span>
+      <div><div class="t1">Ver tutorial</div><div class="t2">Un repaso rápido de cómo funciona Drobe</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
     <!-- Consentimiento B2B — CRÍTICO para el negocio -->
     <div class="consent-card reveal" style="animation-delay:.04s">
       <div class="cc-head">${svg('dna',18)} Datos y privacidad</div>
@@ -1471,6 +1654,9 @@ function vPerfil(m){
     ${[['Cuenta y sincronización','user'],['Notificaciones','bell'],['Privacidad y datos','lock'],['Acerca de Drobe','spark']].map((t,i)=>`<div class="opt reveal" style="animation-delay:${0.1+i*0.04}s;padding:15px 18px"><span class="ring" style="width:34px;height:34px;background:var(--surface)">${svg(t[1],18)}</span><div class="t1" style="font-size:15px">${t[0]}</div><span class="arr" style="margin-left:auto">${svg('chev',20)}</span></div>`).join('')}`;
 
   renderAuth(m.querySelector('#authslot'));
+  m.querySelector('#p_tickets')?.addEventListener('click',()=>openTickets());
+  m.querySelector('#p_maletas')?.addEventListener('click',()=>openMaletasGuardadas());
+  m.querySelector('#p_tour')?.addEventListener('click',()=>{ try{localStorage.removeItem('drobe.tour');}catch(e){} startTour(); });
 
   // medidas
   ['altura','peso','pecho','cintura','pie'].forEach(k=>{
@@ -1554,7 +1740,7 @@ function renderWelcome(mode='intro'){
     document.body.appendChild(el);
     el.querySelector('#w_signup').onclick=()=>{el.remove();renderWelcome('signup');};
     el.querySelector('#w_login').onclick=()=>{el.remove();renderWelcome('login');};
-    el.querySelector('#w_skip').onclick=()=>{markSeen();el.remove();};
+    el.querySelector('#w_skip').onclick=()=>{markSeen();el.remove();maybeStartTour();};
     return;
   }
   const isSignup=mode==='signup';
@@ -1586,7 +1772,7 @@ function renderWelcome(mode='intro'){
   </div>`;
   document.body.appendChild(el);
   el.querySelector('#wb').onclick=()=>{el.remove();renderWelcome('intro');};
-  el.querySelector('#w_skip2').onclick=()=>{markSeen();el.remove();};
+  el.querySelector('#w_skip2').onclick=()=>{markSeen();el.remove();maybeStartTour();};
   let sex='';
   el.querySelectorAll('[data-sex]').forEach(b=>b.onclick=()=>{sex=b.dataset.sex;el.querySelectorAll('[data-sex]').forEach(x=>x.classList.toggle('on',x===b));});
   el.querySelector('#w_go').onclick=async function(){
@@ -1594,7 +1780,7 @@ function renderWelcome(mode='intro'){
     const msg=el.querySelector('#w_msg');
     if(!em||!pw){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">Introduce email y contraseña.</div>`;return;}
     if(pw.length<6){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">La contraseña debe tener al menos 6 caracteres.</div>`;return;}
-    if(!cloud.cloudEnabled()){markSeen();el.remove();return;}
+    if(!cloud.cloudEnabled()){markSeen();el.remove();maybeStartTour();return;}
     this.disabled=true; this.textContent='Conectando…';
     try{
       const s=await cloud.signInOrUp(em,pw);
@@ -1611,7 +1797,7 @@ function renderWelcome(mode='intro'){
           save();
           cloud.updateProfile({name:store.profile.name,age:store.profile.age,sex:store.profile.sex,consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:true,consent_at:store.profile.consent_at}).catch(()=>{});
         }
-        await syncFromCloud(); markSeen(); el.remove(); render();
+        await syncFromCloud(); markSeen(); el.remove(); render(); maybeStartTour();
       } else {
         msg.innerHTML=`<div class="note warn" style="margin:10px 0">${svg('spark',16)}<span><b>Tu cuenta se creó pero aún no tienes sesión activa.</b> Confirma el email que te ha llegado y vuelve a entrar con tu contraseña. Mientras tanto, si sigues usando la app, tus prendas se guardarán <b>solo en este dispositivo</b> y se perderían si borras los datos del navegador.</span></div>`;
         this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
@@ -1621,6 +1807,347 @@ function renderWelcome(mode='intro'){
       this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
     }
   };
+}
+
+/* ═══════════════════════════════════════════
+   TOUR GUIADO — capa visual independiente.
+   No toca datos ni render(); solo lee el DOM ya pintado
+   y resalta elementos con explicaciones. Si un paso no
+   encuentra su elemento, lo salta sin romper nada.
+═══════════════════════════════════════════ */
+function tourSeen(){ try{return localStorage.getItem('drobe.tour')==='1';}catch(e){return true;} }
+function markTourSeen(){ try{localStorage.setItem('drobe.tour','1');}catch(e){} }
+
+const TOUR_STEPS=[
+  {sel:'.hero-look, .title', title:'Tu armario', body:'Aquí vive tu ropa. Cada mañana verás arriba una propuesta de look pensada para el tiempo de hoy y tu estilo.', navTo:'armario'},
+  {sel:'[data-t="add"]', title:'Añade prendas', body:'Este es el botón más importante. Haz una foto a una prenda o escanea el ticket de compra: Drobe la reconoce y la cataloga sola. Cuantas más subas, mejor te conocerá.', navTo:'armario'},
+  {sel:'#main', title:'Tu estilista', body:'Pregúntale qué ponerte, si comprar algo que has visto, o prepara la maleta de un viaje. Todo se adapta a lo que ya tienes y a tus gustos.', navTo:'estilista'},
+  {sel:'#main', title:'Tu ADN de estilo', body:'Aquí ves tu armario en datos: tus marcas, tus colores, el valor de tu ropa y qué prendas tienes dormidas. Se afina con cada prenda que añades.', navTo:'insights'},
+  {sel:'#main', title:'Perfil, tickets y ajustes', body:'Tus tickets con plazos de cambio y garantías, tus maletas guardadas, y tus datos. Cuanto más completo esté tu perfil, más acierta Drobe.', navTo:'perfil'},
+  {sel:null, title:'Listo', body:'Eso es todo. Empieza añadiendo 3 o 4 prendas y verás cómo Drobe empieza a conocerte.', navTo:'armario', final:true}
+];
+
+let tourIdx=0, tourActive=false;
+function maybeStartTour(){
+  if(tourSeen())return;
+  // asegurar que estamos en armario y que ha pintado
+  if(route!=='armario')go('armario');
+  setTimeout(()=>{ if(!tourSeen()) startTour(); }, 450);
+}
+function startTour(){
+  if(tourActive)return;
+  tourActive=true; tourIdx=0;
+  showTourStep();
+}
+function endTour(){
+  tourActive=false;
+  markTourSeen();
+  document.getElementById('tour-ov')?.remove();
+}
+function showTourStep(){
+  document.getElementById('tour-ov')?.remove();
+  if(tourIdx>=TOUR_STEPS.length){ endTour(); return; }
+  const step=TOUR_STEPS[tourIdx];
+
+  const proceed=()=>{
+    if(!tourActive) return; // por si se cerró mientras esperábamos
+    let target=null;
+    if(step.sel){ try{ target=document.querySelector(step.sel); }catch(e){ target=null; } }
+
+    const ov=document.createElement('div'); ov.id='tour-ov'; ov.className='tour-ov';
+    const card=document.createElement('div'); card.className='tour-card';
+
+    let focusTop=null, focusBottom=null;
+    if(target){
+      const r=target.getBoundingClientRect();
+      // si el elemento ocupa casi toda la pantalla (ej. #main entero), no dibujamos
+      // recuadro: quedaría gigante. Mostramos la explicación centrada.
+      const tooBig = r.height > window.innerHeight*0.6;
+      if(!tooBig && r.width>0 && r.height>0){
+        const pad=8;
+        const hole=document.createElement('div'); hole.className='tour-hole';
+        hole.style.left=Math.max(6,r.left-pad)+'px';
+        hole.style.top=Math.max(6,r.top-pad)+'px';
+        hole.style.width=Math.min(window.innerWidth-12,r.width+pad*2)+'px';
+        hole.style.height=(r.height+pad*2)+'px';
+        ov.appendChild(hole);
+        focusTop=r.top; focusBottom=r.bottom;
+      }
+    }
+
+    ov.appendChild(card);
+    const dots=TOUR_STEPS.map((_,i)=>`<i class="${i===tourIdx?'on':''}"></i>`).join('');
+    card.innerHTML=`
+      <div class="tour-step">Paso ${tourIdx+1} de ${TOUR_STEPS.length}</div>
+      <div class="tour-title">${step.title}</div>
+      <div class="tour-body">${step.body}</div>
+      <div class="tour-actions">
+        <div class="tour-dots">${dots}</div>
+        <div class="tour-btns">
+          ${step.final?'':`<button class="tour-skip" id="tour-skip">Saltar</button>`}
+          <button class="tour-next" id="tour-next">${step.final?'Empezar':'Siguiente'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+
+    // colocar la tarjeta sin tapar el elemento resaltado
+    if(focusTop!=null){
+      const cardH=card.offsetHeight;
+      if(focusTop < window.innerHeight*0.5){
+        card.style.top=Math.min(window.innerHeight-cardH-16, focusBottom+18)+'px';
+      } else {
+        card.style.top=Math.max(16, focusTop-cardH-18)+'px';
+      }
+    } else {
+      card.style.top=Math.max(16,(window.innerHeight/2-card.offsetHeight/2))+'px';
+    }
+
+    card.querySelector('#tour-next').onclick=()=>{ tourIdx++; showTourStep(); };
+    card.querySelector('#tour-skip')?.addEventListener('click',endTour);
+  };
+
+  if(step.navTo && route!==step.navTo){
+    go(step.navTo);
+    setTimeout(proceed,360);
+  } else {
+    setTimeout(proceed,80);
+  }
+}
+
+/* ═══════════════════════════════════════════
+   RED SOCIAL — módulo autocontenido.
+   No toca el guardado ni render() del armario propio.
+═══════════════════════════════════════════ */
+let _mySocial=null;
+async function refreshUnread(){
+  try{
+    const n=await cloud.unreadCount();
+    const dot=document.getElementById('unread_dot');
+    if(dot)dot.style.display=n>0?'block':'none';
+  }catch(e){}
+}
+
+async function openSocial(){
+  if(!session){ toast('Inicia sesión para usar la comunidad'); go('perfil'); return; }
+  const el=document.createElement('div'); el.className='ficha'; el.id='social';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="soc_b">${svg('back',20)}</button><span class="t">Comunidad</span></div>
+    <div id="soc_body"><div class="empty" style="padding-top:40px">${svg('load',26)}<div style="margin-top:10px">Cargando…</div></div></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#soc_b').onclick=()=>el.remove();
+  await renderSocialHome(el.querySelector('#soc_body'));
+}
+
+async function renderSocialHome(body){
+  _mySocial=await cloud.getMySocial();
+  if(!_mySocial||!_mySocial.username){ renderUsernameSetup(body); return; }
+  const { friends, incoming, outgoing }=await cloud.getFriendships();
+  body.innerHTML=`
+    <div class="soc-me">
+      <div class="soc-av">${esc(_mySocial.avatar||_mySocial.username[0].toUpperCase())}</div>
+      <div><div class="soc-name">${esc(_mySocial.display_name||_mySocial.username)}</div><div class="soc-handle">@${esc(_mySocial.username)}</div></div>
+    </div>
+
+    <div class="soc-search">
+      ${svg('search',18)}<input id="soc_q" placeholder="Buscar por @usuario…" autocapitalize="off" autocorrect="off"/>
+    </div>
+    <div id="soc_results"></div>
+
+    ${incoming.length?`<div class="shead"><h2>Solicitudes</h2></div>
+      ${incoming.map(f=>friendRow(f,'incoming')).join('')}`:''}
+
+    <div class="shead"><h2>Amigos ${friends.length?`· ${friends.length}`:''}</h2></div>
+    ${friends.length?friends.map(f=>friendRow(f,'friend')).join(''):`<div class="soc-empty">Aún no tienes amigos. Búscalos por su @usuario y verás sus armarios cuando acepten.</div>`}
+    ${outgoing.length?`<div class="shead"><h2>Pendientes de aceptar</h2></div>${outgoing.map(f=>friendRow(f,'outgoing')).join('')}`:''}
+  `;
+
+  // buscador
+  const q=body.querySelector('#soc_q'); const results=body.querySelector('#soc_results');
+  let t;
+  q.oninput=()=>{ clearTimeout(t); t=setTimeout(async()=>{
+    const term=q.value.trim();
+    if(term.length<2){ results.innerHTML=''; return; }
+    results.innerHTML=`<div class="soc-empty">${svg('load',16)} Buscando…</div>`;
+    const users=await cloud.searchUsers(term);
+    const known=new Set([...friends,...incoming,...outgoing].map(f=>f.otherId));
+    results.innerHTML=users.length?users.map(u=>`
+      <div class="friend-row">
+        <div class="soc-av sm">${esc(u.avatar||u.username[0].toUpperCase())}</div>
+        <div class="fr-info"><div class="fr-name">${esc(u.display_name||u.username)}</div><div class="fr-handle">@${esc(u.username)}</div></div>
+        ${known.has(u.id)?`<span class="fr-tag">Ya conectado</span>`:`<button class="fr-btn" data-add="${u.id}">Agregar</button>`}
+      </div>`).join(''):`<div class="soc-empty">Sin resultados para "${esc(term)}".</div>`;
+    results.querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; b.textContent='…';
+      const r=await cloud.sendFriendRequest(b.dataset.add);
+      if(r.ok){ b.textContent='Enviada'; b.classList.add('done'); }
+      else { b.textContent='Reintentar'; b.disabled=false; toast(r.reason||'No se pudo'); }
+    });
+  },320); };
+
+  // acciones en filas (aceptar/rechazar/abrir)
+  bindFriendRows(body);
+}
+
+function friendRow(f,kind){
+  const p=f.profile;
+  return `<div class="friend-row" data-fid="${f.id}" data-oid="${f.otherId}">
+    <div class="soc-av sm" ${kind==='friend'?`data-open="${f.otherId}"`:''}>${esc(p.avatar||(p.username||'U')[0].toUpperCase())}</div>
+    <div class="fr-info" ${kind==='friend'?`data-open="${f.otherId}"`:''}>
+      <div class="fr-name">${esc(p.display_name||p.username)}</div><div class="fr-handle">@${esc(p.username)}</div></div>
+    ${kind==='incoming'?`<div class="fr-actions"><button class="fr-btn" data-accept="${f.id}">Aceptar</button><button class="fr-btn ghost" data-reject="${f.id}">✕</button></div>`
+      :kind==='outgoing'?`<span class="fr-tag">Pendiente</span>`
+      :`<button class="fr-btn ghost" data-open="${f.otherId}">Ver</button>`}
+  </div>`;
+}
+
+function bindFriendRows(body){
+  body.querySelectorAll('[data-accept]').forEach(b=>b.onclick=async(e)=>{ e.stopPropagation(); b.disabled=true; await cloud.respondFriend(b.dataset.accept,true); renderSocialHome(body); });
+  body.querySelectorAll('[data-reject]').forEach(b=>b.onclick=async(e)=>{ e.stopPropagation(); b.disabled=true; await cloud.respondFriend(b.dataset.reject,false); renderSocialHome(body); });
+  body.querySelectorAll('[data-open]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); openFriend(b.dataset.open); });
+}
+
+function renderUsernameSetup(body){
+  body.innerHTML=`
+    <div class="title" style="font-size:30px;margin-bottom:6px">Elige tu<br>nombre de usuario</div>
+    <div class="sub" style="margin-bottom:20px">Así te encontrarán tus amigos para ver armarios y pedirte looks.</div>
+    <div class="field"><label>Nombre visible</label><input id="su_name" placeholder="${esc((store.profile?.name)||'Pepe')}" value="${esc(store.profile?.name||'')}"/></div>
+    <div class="field"><label>Usuario</label><input id="su_user" placeholder="pepe" autocapitalize="off" autocorrect="off"/></div>
+    <div id="su_msg"></div>
+    <button class="btn dark" id="su_go" style="margin-top:8px">Crear mi perfil social</button>`;
+  body.querySelector('#su_go').onclick=async function(){
+    const name=body.querySelector('#su_name').value.trim();
+    const user=body.querySelector('#su_user').value.trim();
+    const msg=body.querySelector('#su_msg');
+    this.disabled=true; this.textContent='Creando…';
+    const r=await cloud.setUsername(user,name);
+    if(r.ok){ renderSocialHome(body); }
+    else { msg.innerHTML=`<div class="sub" style="color:var(--danger);margin:8px 0">${esc(r.reason||'No se pudo')}</div>`; this.disabled=false; this.textContent='Crear mi perfil social'; }
+  };
+}
+
+/* ---- armario de un amigo (navegable, solo lectura) + chat ---- */
+async function openFriend(friendId, tab='wardrobe'){
+  const el=document.createElement('div'); el.className='ficha'; el.id='friend';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="fr_b">${svg('back',20)}</button><span class="t" id="fr_title">Amigo</span></div>
+    <div class="viewseg" style="margin-bottom:16px">
+      <button class="vseg ${tab==='wardrobe'?'on':''}" data-tab="wardrobe">${svg('hanger',16)} Armario</button>
+      <button class="vseg ${tab==='chat'?'on':''}" data-tab="chat">${svg('chat',16)} Chat</button>
+    </div>
+    <div id="fr_body"><div class="empty" style="padding-top:30px">${svg('load',24)}</div></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#fr_b').onclick=()=>{ stopChatPoll(); el.remove(); };
+  el.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ stopChatPoll(); openFriendTab(el,friendId,b.dataset.tab); });
+  // nombre del amigo en la cabecera
+  cloud.getFriendships().then(({friends})=>{
+    const f=friends.find(x=>x.otherId===friendId);
+    const tt=el.querySelector('#fr_title');
+    if(f&&tt)tt.textContent=f.profile.display_name||('@'+f.profile.username);
+  }).catch(()=>{});
+  openFriendTab(el,friendId,tab);
+}
+
+async function openFriendTab(el,friendId,tab){
+  el.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
+  const body=el.querySelector('#fr_body');
+  if(tab==='wardrobe'){
+    body.innerHTML=`<div class="empty" style="padding-top:30px">${svg('load',24)}<div style="margin-top:8px">Abriendo su armario…</div></div>`;
+    const garments=await cloud.getFriendWardrobe(friendId);
+    if(garments===null){ body.innerHTML=`<div class="soc-empty">No puedes ver este armario. Puede que la amistad ya no exista.</div>`; return; }
+    if(!garments.length){ body.innerHTML=`<div class="soc-empty">Su armario está vacío por ahora.</div>`; return; }
+    body.innerHTML=`<div class="note" style="margin-bottom:14px">${svg('spark',16)}<span>Estás viendo su armario. Elige prendas y mándale un look con el botón de abajo.</span></div>
+      <div class="grid" id="fr_grid">${garments.map(g=>`
+        <div class="gcard" data-pick="${g.id}">
+          <div class="ph">${g.img?`<img src="${esc(g.img)}"/>`:''}<span class="pick-check">${svg('check',16)}</span></div>
+          <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div></div>
+        </div>`).join('')}</div>
+      <button class="btn dark" id="fr_sendlook" style="position:sticky;bottom:16px;margin-top:16px;opacity:.5" disabled>${svg('send',18)} Envíale este look (0)</button>`;
+    const picked=new Set();
+    const btn=body.querySelector('#fr_sendlook');
+    body.querySelectorAll('[data-pick]').forEach(c=>c.onclick=()=>{
+      const id=c.dataset.pick;
+      if(picked.has(id)){picked.delete(id);c.classList.remove('picked');}else{picked.add(id);c.classList.add('picked');}
+      btn.disabled=picked.size===0; btn.style.opacity=picked.size?'1':'.5';
+      btn.innerHTML=`${svg('send',18)} Envíale este look (${picked.size})`;
+    });
+    btn.onclick=async()=>{
+      btn.disabled=true; btn.innerHTML=`${svg('load',18)} Enviando…`;
+      const r=await cloud.sendMessage(friendId,{type:'look',body:'Te propongo este look 👗',payload:{ownerId:friendId,garmentIds:[...picked]}});
+      if(r.ok){ openFriendTab(el,friendId,'chat'); }
+      else { btn.disabled=false; btn.innerHTML=`${svg('send',18)} Reintentar`; toast(r.reason||'No se pudo enviar'); }
+    };
+  } else {
+    body.innerHTML=`<div class="chat-scroll" id="chat_scroll"></div>
+      <div class="chat-input"><input id="chat_text" placeholder="Escribe un mensaje…"/><button id="chat_send">${svg('send',18)}</button></div>`;
+    const scroll=body.querySelector('#chat_scroll');
+    const loadMsgs=async()=>{
+      const msgs=await cloud.getMessages(friendId);
+      await cloud.markMessagesRead(friendId); refreshUnread();
+      scroll.innerHTML=msgs.length?msgs.map(renderMsg).join(''):`<div class="soc-empty">Aún no hay mensajes. ¡Salúdale!</div>`;
+      scroll.scrollTop=scroll.scrollHeight;
+      scroll.querySelectorAll('[data-look]').forEach(b=>b.onclick=()=>showLookMessage(b.dataset.look));
+    };
+    await loadMsgs();
+    startChatPoll(loadMsgs);
+    const send=async()=>{
+      const t=body.querySelector('#chat_text'); const v=t.value.trim(); if(!v)return;
+      t.value='';
+      const r=await cloud.sendMessage(friendId,{type:'text',body:v});
+      if(r.ok)loadMsgs(); else toast(r.reason||'No se pudo enviar');
+    };
+    body.querySelector('#chat_send').onclick=send;
+    body.querySelector('#chat_text').onkeydown=(e)=>{ if(e.key==='Enter')send(); };
+  }
+}
+
+function renderMsg(m){
+  if(m.type==='look'){
+    const ids=(m.payload&&m.payload.garmentIds)||[];
+    return `<div class="msg ${m.mine?'mine':''}">
+      <div class="msg-look" data-look='${esc(JSON.stringify(m.payload||{}))}'>
+        ${svg('hanger',16)} ${m.mine?'Le propusiste':'Te propone'} un look · ${ids.length} prenda(s)
+        <span class="msg-look-cta">Ver look</span>
+      </div>
+      ${m.body?`<div class="msg-b">${esc(m.body)}</div>`:''}
+    </div>`;
+  }
+  return `<div class="msg ${m.mine?'mine':''}"><div class="msg-b">${esc(m.body||'')}</div></div>`;
+}
+
+async function showLookMessage(payloadStr){
+  let payload; try{payload=JSON.parse(payloadStr);}catch(e){return;}
+  const ids=payload.garmentIds||[]; const ownerId=payload.ownerId;
+  const ov=document.createElement('div'); ov.className='ficha'; ov.id='lookview'; ov.style.zIndex='300';
+  ov.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="lv_b">${svg('back',20)}</button><span class="t">El look propuesto</span></div>
+    <div id="lv_body"><div class="empty" style="padding-top:30px">${svg('load',24)}</div></div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#lv_b').onclick=()=>ov.remove();
+  // las prendas pueden ser mías (yo soy el owner) o de un amigo
+  let garments=null;
+  const mine=store.garments.filter(g=>ids.includes(g.id));
+  if(mine.length===ids.length) garments=mine;
+  else { const fw=await cloud.getFriendWardrobe(ownerId); garments=(fw||[]).filter(g=>ids.includes(g.id)); }
+  const body=ov.querySelector('#lv_body');
+  body.innerHTML=garments&&garments.length?`<div class="grid">${garments.map(g=>`
+    <div class="gcard"><div class="ph">${g.img?`<img src="${esc(g.img)}"/>`:''}</div>
+    <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div></div></div>`).join('')}</div>`
+    :`<div class="soc-empty">No se pudieron cargar las prendas de este look.</div>`;
+}
+
+// polling del chat (robusto y simple; se detiene al salir)
+let _chatPoll=null;
+function startChatPoll(fn){ stopChatPoll(); _chatPoll=setInterval(fn,4000); }
+function stopChatPoll(){ if(_chatPoll){clearInterval(_chatPoll);_chatPoll=null;} }
+
+// toast genérico ligero (reutiliza estilo de syncwarn)
+function toast(txt){
+  const old=document.getElementById('gtoast'); if(old)old.remove();
+  const el=document.createElement('div'); el.id='gtoast'; el.className='syncwarn'; el.style.background='var(--noir)'; el.style.color='#F6F1E9';
+  el.innerHTML=`${svg('spark',16)} ${esc(txt)}`;
+  document.body.appendChild(el); setTimeout(()=>el.remove(),3500);
 }
 
 /* ═══════════════════════════════════════════
@@ -1674,6 +2201,11 @@ async function syncFromCloud(){
   const mals=await cloud.pullMaletas();
   if(mals){
     store.maletas=mals.map(m=>({id:m.id,name:m.name,dest:m.dest,days:m.days,plan:m.plan,items:m.items||[],looks:m.looks,weight:m.weight,createdAt:m.created_at}));
+  }
+  // traer tickets guardados
+  const tks=await cloud.pullTickets();
+  if(tks){
+    store.tickets=tks.map(t=>({id:t.id,store:t.store,dateISO:t.date,total:t.total,returnDays:t.return_days,warrantyMonths:t.warranty_months,img:t.img,garmentIds:t.garment_ids||[],items:t.items||[],createdAt:t.created_at}));
   }
   save();
   render();
