@@ -34,8 +34,12 @@ module.exports = async function handler(req, res) {
   const maxPrice = (body && body.maxPrice) || null;     // para filtrar alternativas más baratas
   const ownedBrands = (body && body.ownedBrands) || [];  // marcas que el usuario ya tiene, para priorizar
   const sex = (body && body.sex) || '';                  // para afinar (hombre/mujer)
+  const channel = (body && body.channel) || 'new';       // 'new' tiendas | 'used' segunda mano
   const country = (body && body.country) || 'es';
   if (!query && !productType) { res.status(400).json({ error: 'Falta query' }); return; }
+
+  // sufijo para segunda mano: Google Shopping indexa Vinted/Wallapop/Micolet
+  const usedSuffix = channel === 'used' ? ' segunda mano (vinted OR wallapop OR micolet)' : '';
 
   async function serpSearch(q) {
     try {
@@ -188,9 +192,9 @@ module.exports = async function handler(req, res) {
 
       // 1) PRIORIDAD: buscar explícitamente dentro de las marcas que el usuario YA usa.
       //    Esto es lo que evita recomendar marcas ajenas a su estilo.
-      const brandsToTry = ownedBrands.slice(0, 3);
+      const brandsToTry = ownedBrands.slice(0, channel === 'used' ? 2 : 3);
       for (const b of brandsToTry) {
-        const bq = `${b} ${genericQuery}`.trim();
+        const bq = `${b} ${genericQuery}${usedSuffix}`.trim();
         const raw = await serpSearch(bq);
         raw.map(mapItem)
           .filter(p => p.title && validPrice(p) && matchesType(p))
@@ -201,7 +205,7 @@ module.exports = async function handler(req, res) {
       // 2) Completar con búsqueda general SOLO si faltan resultados de sus marcas,
       //    y aun así excluir la marca de referencia y respetar tipo/precio.
       if (collected.length < 4) {
-        const altRaw = await serpSearch(genericQuery);
+        const altRaw = await serpSearch((genericQuery + usedSuffix).trim());
         altRaw.map(mapItem)
           .filter(p => p.title && validPrice(p) && matchesType(p))
           .filter(p => !brandLC || !((p.title||'').toLowerCase().includes(brandLC) || (p.source||'').toLowerCase().includes(brandLC)))
@@ -219,11 +223,15 @@ module.exports = async function handler(req, res) {
 
     const exactOut = exact.slice(0, 5);
     const altOut = alternatives.slice(0, 5);
-    // presupuesto de llamadas: la búsqueda por marcas del usuario ya consume varias,
-    // así que limitamos la resolución de enlaces directos para no agotar la cuota.
-    const brandSearches = Math.min(ownedBrands.length, 3);
-    await enrichDirect(exactOut, brandSearches >= 2 ? 2 : 3);
-    await enrichDirect(altOut, brandSearches >= 2 ? 1 : 2);
+    // presupuesto de llamadas. En segunda mano los enlaces de marketplace ya son
+    // directos, así que no gastamos llamadas extra resolviéndolos.
+    if (channel === 'used') {
+      // sin enrichDirect
+    } else {
+      const brandSearches = Math.min(ownedBrands.length, 3);
+      await enrichDirect(exactOut, brandSearches >= 2 ? 2 : 3);
+      await enrichDirect(altOut, brandSearches >= 2 ? 1 : 2);
+    }
 
     res.status(200).json({
       available: true,
