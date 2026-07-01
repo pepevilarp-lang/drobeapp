@@ -1297,10 +1297,29 @@ function buildMaletaPlan(){
    ESTILISTA
 ═══════════════════════════════════════════ */
 let stylistMsg=null;
-const WEATHER={temp:17,label:'Nublado',city:'Barcelona'};
+// Tiempo REAL de Barcelona (Open-Meteo, sin API key). Nunca inventamos:
+// hasta que llega el dato, temp/label son null y no se muestran.
+const WEATHER={temp:null,label:null,city:'Barcelona',lat:41.3874,lon:2.1686,loaded:false};
+const WMO={0:'Despejado',1:'Casi despejado',2:'Parcialmente nublado',3:'Nublado',45:'Niebla',48:'Niebla',51:'Llovizna',53:'Llovizna',55:'Llovizna',61:'Lluvia',63:'Lluvia',65:'Lluvia fuerte',71:'Nieve',73:'Nieve',75:'Nieve',80:'Chubascos',81:'Chubascos',82:'Chubascos fuertes',95:'Tormenta',96:'Tormenta',99:'Tormenta'};
+async function loadWeather(){
+  try{
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${WEATHER.lat}&longitude=${WEATHER.lon}&current=temperature_2m,weathercode&timezone=auto`;
+    const r=await fetch(url); const d=await r.json();
+    const t=d?.current?.temperature_2m, code=d?.current?.weathercode;
+    if(typeof t==='number'){
+      WEATHER.temp=Math.round(t);
+      WEATHER.label=WMO[code]||'';
+      WEATHER.loaded=true;
+      // repintar solo el armario si está visible (sin recrear toda la app)
+      if(route==='armario'){ const eb=document.querySelector('#main .eyebrow'); if(eb)eb.textContent=`${WEATHER.city} · ${WEATHER.temp}°`; }
+    }
+  }catch(e){ /* sin conexión: no mostramos temperatura inventada */ }
+}
 function pickOutfit(){
   const t=WEATHER.temp;
-  const top=t<15?store.garments.find(g=>g.catGroup==='Jerséis/Sudaderas'&&g.status==='uso'):store.garments.find(g=>g.catGroup==='Camisetas'&&g.status==='uso');
+  // si no hay dato de tiempo aún, elegimos algo neutro sin asumir frío/calor
+  const cold=t!=null&&t<15;
+  const top=cold?store.garments.find(g=>g.catGroup==='Jerséis/Sudaderas'&&g.status==='uso'):store.garments.find(g=>g.catGroup==='Camisetas'&&g.status==='uso');
   const s=store.garments.find(g=>g.catGroup==='Camisetas'&&g.status==='uso'&&g!==top);
   return [top,s].filter(Boolean);
 }
