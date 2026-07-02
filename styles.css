@@ -548,3 +548,36 @@ input::placeholder{color:var(--ink3);opacity:.75}
 .pstep{display:flex;align-items:center;gap:11px;font-size:13.5px;color:var(--ink3);transition:color .4s var(--ease)}
 .pstep.done{color:var(--ink)}
 .pstep.done .pdot{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+
+/* buscador del armario */
+.ward-search{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:0 12px;margin-top:16px;box-shadow:var(--s1)}
+.ward-search .ws-ico{color:var(--ink3);display:flex;flex:none}
+.ward-search input{flex:1;border:none;background:none;padding:13px 0;font-size:15px;color:var(--ink)}
+.ws-clear{width:30px;height:30px;border-radius:999px;color:var(--ink3);font-size:13px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--surface-2)}
+.ward-empty{grid-column:1/-1;text-align:center;padding:44px 20px;color:var(--ink3);font-size:14px;display:flex;flex-direction:column;align-items:center;gap:10px}
+.ward-empty svg{stroke:var(--ink3)}
+
+/* ═══ DROBE FOR BRANDS (demo B2B, editorial oscuro) ═══ */
+.ficha.b2b{background:var(--noir);color:#F6F1E9}
+.b2b-bar{color:#F6F1E9}.b2b-bar button{color:#F6F1E9}.b2b-bar .t{color:#F6F1E9}
+.b2b-head{margin:8px 0 18px}
+.b2b-eyebrow{font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#E8C9A8}
+.b2b-title{font-family:var(--serif);font-size:32px;font-weight:500;font-style:italic;line-height:1.1;margin-top:8px}
+.b2b-chips .chip{background:rgba(246,241,233,.07);border-color:rgba(246,241,233,.15);color:#D8D2C6}
+.b2b-chips .chip.on{background:#F6F1E9;color:var(--noir);border-color:#F6F1E9}
+.b2b-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
+.b2b-card{background:rgba(246,241,233,.06);border:1px solid rgba(246,241,233,.1);border-radius:16px;padding:16px}
+.b2b-card .bn{font-family:var(--serif);font-size:30px;font-weight:500;font-variant-numeric:tabular-nums}
+.b2b-card .bl{font-size:11.5px;color:#A9A39A;margin-top:3px}
+.b2b-card.warn .bn{color:#E8A87C}
+.b2b-sec{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#8F897E;margin:22px 0 10px}
+.b2b-signal{font-family:var(--serif);font-size:18px;font-style:italic;line-height:1.45;color:#EDE7DB}
+.b2b-signal b{color:#E8C9A8}
+.b2b-rows{display:flex;flex-direction:column;gap:9px}
+.b2b-row{display:flex;align-items:center;gap:12px;font-size:13.5px}
+.b2b-row>span:first-child{width:88px;color:#D8D2C6}
+.b2b-bar-t{flex:1;height:6px;background:rgba(246,241,233,.1);border-radius:99px;overflow:hidden}
+.b2b-bar-t div{height:100%;background:#E8C9A8;border-radius:99px;transition:width .7s var(--ease)}
+.b2b-pct{width:36px;text-align:right;color:#A9A39A;font-variant-numeric:tabular-nums;font-size:12px}
+.b2b-foot{display:flex;gap:8px;align-items:flex-start;margin-top:28px;font-size:12px;color:#8F897E;line-height:1.5}
+.b2b-foot svg{stroke:#8F897E;flex:none;margin-top:1px}
