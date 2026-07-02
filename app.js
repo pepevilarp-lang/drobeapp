@@ -61,6 +61,7 @@ const IC = {
   heart:'M12 21C6 16.5 3 13 3 9a4.5 4.5 0 019-1 4.5 4.5 0 019 1c0 4-3 7.5-9 12z',
   search:'M11 4a7 7 0 105.2 11.7L21 20M11 4a7 7 0 015.2 11.7',
   hanger:'M12 5a2 2 0 112 2c-1 0-1.5.6-1.5 1.3 0 .5.3.9.8 1.2L21 14H3l7.7-4.2',
+  eye:'M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12zM12 14.8a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6z',
 };
 const svg = (n,s,w) => {
   s=s||22; w=w||1.7;
@@ -126,6 +127,7 @@ function showSyncWarning(reason){
 }
 const findG = id => store.garments.find(g=>g.id==id);
 function addGarment(g){
+  haptic(12);
   g.id=g.id||('g'+Date.now()+Math.random().toString(36).slice(2,6));
   store.garments.unshift(g); save();
   if(session){
@@ -266,6 +268,8 @@ function trackPurchaseEvent(data){
    HELPERS UI
 ═══════════════════════════════════════════ */
 const esc = s => (s==null?'':String(s)).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+// Haptics sutil (Android; no-op silencioso en iOS Safari)
+const haptic = (ms=10) => { try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} };
 function stars(c,total=5){ const n=Math.round((c||0)*total); return `<span class="stars">${Array.from({length:total},(_,i)=>`<span class="${i<n?'on':'off'}">★</span>`).join('')}</span>`; }
 function confBadge(c){ const p=Math.round((c||0)*100); return `<span class="cbadge ${p<60?'low':p<85?'med':'hi'}">${p}%</span>`; }
 function optSel(opts,val){ return (val&&!opts.includes(val)?`<option selected>${val}</option>`:'')+opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join(''); }
@@ -360,7 +364,9 @@ async function callAI(system,user,image=null){
   try{
     const body={system,user};
     if(image)body.image={media_type:image.media_type,data:image.data};
-    const r=await fetch('/api/ai',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    const ctrl=new AbortController(); const tm=setTimeout(()=>ctrl.abort(),25000);
+    const r=await fetch('/api/ai',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:ctrl.signal});
+    clearTimeout(tm);
     if(!r.ok)return null;
     const d=await r.json();
     const text=(d.text||'').replace(/```json\s*/gi,'').replace(/```/g,'').trim();
@@ -389,7 +395,7 @@ Responde SOLO JSON: {"store":"","date":"","dateISO":"","total":0,"items":[{"name
    ROUTER
 ═══════════════════════════════════════════ */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', fichaId=null;
+let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', fichaId=null, addMode='choose';
 const app=document.getElementById('app');
 const TABS=[
   {k:'armario',i:'shirt',l:'Armario'},
@@ -398,13 +404,13 @@ const TABS=[
   {k:'insights',i:'chart',l:'Insights'},
   {k:'perfil',i:'user',l:'Perfil'}
 ];
-function go(r){ if(r!==route)unmountWardrobe3D(); route=r; render(); window.scrollTo(0,0); }
+function go(r){ if(r!==route)unmountWardrobe3D(); if(r==='add')addMode='choose'; route=r; render(); window.scrollTo(0,0); }
 function render(){
   app.innerHTML=`<div class="shell">
     <div class="top"><div class="word">Dro<b>be</b></div>
       <div style="display:flex;gap:8px">
-        <button class="ico" id="top_social" style="position:relative">${svg('people',19)}<span class="unread-dot" id="unread_dot" style="display:none"></span></button>
-        <button class="ico">${svg('bell',19)}</button>
+        <button class="ico" id="top_social" aria-label="Comunidad" style="position:relative">${svg('people',19)}<span class="unread-dot" id="unread_dot" style="display:none"></span></button>
+        <button class="ico" aria-label="Notificaciones">${svg('bell',19)}</button>
       </div>
     </div>
     <main id="main" class="fade"></main>
@@ -426,7 +432,7 @@ function render(){
 function vArmario(m){
   const look=pickOutfit();
   m.innerHTML=`<div class="reveal">
-    <div class="eyebrow">${WEATHER.city} · ${WEATHER.temp}°</div>
+    <div class="eyebrow">${WEATHER.city}${WEATHER.temp!=null?` · ${WEATHER.temp}°`:''}</div>
     <div class="title">Hoy te queda<br>bien lo sencillo</div></div>
     ${look.length?`<div class="hero-look reveal" style="animation-delay:.05s" id="herolook">
       <div class="hl-ph">${look[0].img?`<img src="${look[0].img}"/>`:''}</div>
@@ -457,7 +463,7 @@ function vArmario(m){
     const list=store.garments.filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':(g.catGroup||g.cat)===gridFilter);
     ward.innerHTML=`<div class="chips" style="margin-top:14px">${cats.map(c=>`<button class="chip ${gridFilter===c?'on':''}" data-f="${c}">${c}</button>`).join('')}</div>
       <div class="grid">${list.map((g,i)=>`<div class="gcard reveal" data-g="${g.id}" style="animation-delay:${i*0.04}s">
-        <div class="ph"><img src="${g.img||''}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}</div>
+        <div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}</div>
         <div class="cap"><div class="b">${g.brand}</div><div class="n">${g.name}</div><div class="m">${g.cat} · ${g.color}</div></div></div>`).join('')}</div>`;
     ward.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{gridFilter=b.dataset.f;vArmario(m);});
     ward.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>openFicha(b.dataset.g));
@@ -487,8 +493,8 @@ function renderFicha(){
   const el=document.createElement('div'); el.className='ficha'; el.id='ficha';
   el.innerHTML=`
     <div class="ficha-hero">
-      <button class="ficha-close" id="fclose">${svg('back',20)}</button>
-      <button class="ficha-edit" id="fedit">${svg('pen',18)}</button>
+      <button class="ficha-close" id="fclose" aria-label="Cerrar">${svg('back',20)}</button>
+      <button class="ficha-edit" id="fedit" aria-label="Editar prenda">${svg('pen',18)}</button>
       <div class="track" id="track">${photos.map(p=>`<img src="${p}"/>`).join('')}</div>
       <div class="ficha-overlay"><div class="ficha-b">${g.brand}</div><div class="ficha-n">${g.name}</div></div>
       ${photos.length>1?`<div class="ficha-dots">${photos.map((_,i)=>`<i class="${i===0?'on':''}"></i>`).join('')}</div>`:''}
@@ -508,7 +514,7 @@ function renderFicha(){
         ${spec('Última vez',g.lastWorn||'—')}${spec('Coste/uso',cpw(g).toFixed(2)+' €',true)}
       </div>
       <div class="shead"><h2>Combina con</h2></div>
-      <div class="compat">${compatList(g).map(c=>`<div class="it" data-c="${c.g.id}"><div class="ph"><img src="${c.g.img||''}"/></div><div class="pct">${c.pct}%</div></div>`).join('')}</div>
+      <div class="compat">${compatList(g).map(c=>`<div class="it" data-c="${c.g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${c.g.img||''}"/></div><div class="pct">${c.pct}%</div></div>`).join('')}</div>
       <div class="shead"><h2>Documentación</h2></div>
       ${g.docs&&g.docs.length?g.docs.map(d=>`<div class="docrow"><span class="dico">${svg(d.icon||'file',20)}</span><div><div class="dn">${d.type}</div><div class="dt">${d.name} · ${d.dt}</div></div><span class="open">${svg('chev',18)}</span></div>`).join(''):'<div class="sub" style="margin:-2px 0 10px">Sin documentos. Añade el ticket o la garantía.</div>'}
       <label class="docadd" for="docfile">${svg('add',18)} Añadir ticket, factura o garantía</label>
@@ -530,7 +536,7 @@ function renderFicha(){
   if(track&&dots.length)track.onscroll=()=>{ const i=Math.round(track.scrollLeft/track.clientWidth); dots.forEach((d,j)=>d.className=j===i?'on':''); };
   el.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>openFicha(b.dataset.c));
   el.querySelector('#sale').onclick=()=>{ g.status=onSale?'uso':'venta'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
-  el.querySelector('#wear').onclick=()=>{ g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
+  el.querySelector('#wear').onclick=()=>{ haptic(); g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
   if(el.querySelector('#sell_wallapop'))el.querySelector('#sell_wallapop').onclick=()=>prepararVenta(g,'wallapop');
   if(el.querySelector('#sell_vinted'))el.querySelector('#sell_vinted').onclick=()=>prepararVenta(g,'vinted');
   el.querySelector('#docfile').addEventListener('change',ev=>{
@@ -591,7 +597,6 @@ Devuelve SOLO JSON: {"titulo":"título corto y atractivo, max 50 chars","descrip
 /* ═══════════════════════════════════════════
    AÑADIR
 ═══════════════════════════════════════════ */
-let addMode='choose';
 function vAdd(m){
   if(addMode!=='choose'){return;}
   m.innerHTML=`
@@ -840,7 +845,7 @@ function renderTicketsView(el){
       const rs=returnStatus(t);
       const warranty=t.warrantyMonths?(()=>{const w=new Date(t.dateISO);w.setMonth(w.getMonth()+t.warrantyMonths);return `Garantía hasta ${fmtDate(w.toISOString())}`;})():null;
       return `<div class="tk-card" data-id="${t.id}">
-        ${t.img?`<div class="tk-thumb"><img src="${esc(t.img)}"/></div>`:`<div class="tk-thumb ph">${svg('receipt',22)}</div>`}
+        ${t.img?`<div class="tk-thumb"><img loading="lazy" decoding="async" src="${esc(t.img)}"/></div>`:`<div class="tk-thumb ph">${svg('receipt',22)}</div>`}
         <div class="tk-body">
           <div class="tk-store">${esc(t.store||'Ticket')}</div>
           <div class="tk-meta">${fmtDate(t.dateISO)} · ${(t.items||[]).length} prenda(s) · ${Math.round(t.total||0)}€</div>
@@ -976,7 +981,7 @@ Mira en tienda: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.`
       html+=`<div class="shead"><h2>${brand||'Misma prenda'} · mejor precio</h2></div>`;
       if(saving&&saving>0)html+=`<div class="save-banner">${svg('tag',18)} La encuentras <b>${saving}€ más barata</b> que en ${storeName||'la tienda'}</div>`;
       html+=offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener">
-        <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+        <div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div>
         <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div>
         <div class="offer-p">${o.price||''}</div></a>`).join('');
     }
@@ -985,7 +990,7 @@ Mira en tienda: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.`
       html+=`<div class="shead"><h2>Alternativas parecidas más baratas</h2></div>
         <div class="sub" style="margin:-4px 0 10px">Otras marcas con prendas similares a mejor precio.</div>`;
       html+=offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener">
-        <div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+        <div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div>
         <div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div>
         <div class="offer-p">${o.price||''}</div></a>`).join('');
     }
@@ -1265,7 +1270,7 @@ function openMaletasGuardadas(){
       return `<div class="maleta-card" data-id="${m.id}">
         <div class="maleta-head"><div><div class="maleta-n">${esc(m.name)}</div><div class="maleta-s">${m.dest||''}${m.days?' · '+m.days+' días':''} · ${its.length} prendas</div></div>
           <button class="maleta-del" data-del="${m.id}">${svg('trash',16)}</button></div>
-        <div class="maleta-thumbs">${its.slice(0,6).map(g=>`<div class="mt"><img src="${g.img||''}"/></div>`).join('')}</div>
+        <div class="maleta-thumbs">${its.slice(0,6).map(g=>`<div class="mt"><img loading="lazy" decoding="async" src="${g.img||''}"/></div>`).join('')}</div>
       </div>`;
     }).join('')}
   </div>`;
@@ -1341,24 +1346,24 @@ function vEstilista(m){
   bindOutfit(document.getElementById('adv'));
 }
 const bindOutfit=scope=>scope.querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>openFicha(b.dataset.o));
-const defaultAdvice=()=>({say:`Con ${WEATHER.temp}° y ${WEATHER.label.toLowerCase()} en ${WEATHER.city}, algodón limpio en neutros. Va contigo y con el día.`,items:pickOutfit()});
+const defaultAdvice=()=>{
+  const hasWx = WEATHER.temp!=null;
+  const say = hasWx
+    ? `Con ${WEATHER.temp}° y ${(WEATHER.label||'').toLowerCase()} en ${WEATHER.city}, algodón limpio en neutros. Va contigo y con el día.`
+    : `Hoy, algo sencillo en neutros: algodón limpio que combina con casi todo. Va contigo y con el día.`;
+  return {say, items:pickOutfit()};
+};
 function advice(k){
   if(k==='muerta'){const d=store.garments.slice().sort((a,b)=>a.worn-b.worn).slice(0,3);return {say:'Estas apenas las tocas. O las rescatas esta semana, o ponlas en venta antes de que pierdan valor.',items:d};}
   if(k==='vender'){const s=store.garments.filter(g=>g.worn<8).sort((a,b)=>cpw(b)-cpw(a)).slice(0,3);return {say:'Por coste por uso y poco uso, estas son las candidatas a vender. Recuperas valor sin tocar lo que usas a diario.',items:s};}
   return defaultAdvice();
 }
-const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Estilista Drobe<span>Solo con tu armario</span></div></div><div class="say">${a.say}</div><div class="outfit">${(a.items||[]).map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img src="${g.img||''}"/></div><div class="l">${g.brand}</div></div>`).join('')}</div></div>`;
+const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Estilista Drobe<span>Solo con tu armario</span></div></div><div class="say">${a.say}</div><div class="outfit">${(a.items||[]).map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/></div><div class="l">${g.brand}</div></div>`).join('')}</div></div>`;
 
 /* ═══════════════════════════════════════════
    ASESOR DE COMPRA
 ═══════════════════════════════════════════ */
 function wardrobeSummary(){ return store.garments.filter(g=>g.status!=='venta').map(g=>`${g.cat} ${g.color} (${g.brand})`).join(', '); }
-async function searchOffers(query){
-  try{
-    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query})});
-    const d=await r.json(); return d&&d.available?d.results||[]:null;
-  }catch(e){ return null; }
-}
 async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands,sex,channel}){
   try{
     const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands,sex,channel})});
@@ -1437,11 +1442,11 @@ function renderAsesorForm(el,prefill={}){
     } else {
       if(offers.exact&&offers.exact.length){
         html+=`<div class="shead"><h2>${data.brand||'Esta prenda'} · mejor precio</h2></div>`+
-          offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+          offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}${i===0?' · más barato':''}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
       }
       if(offers.alternatives&&offers.alternatives.length){
         html+=`<div class="shead"><h2>Alternativas para ti</h2></div><div class="sub" style="margin:-4px 0 10px">Parecidas y más baratas, priorizando marcas que ya usas.</div>`+
-          offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
+          offers.alternatives.slice(0,4).map(o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`).join('');
       }
     }
     out.innerHTML=html;
@@ -1488,7 +1493,8 @@ Devuelve SOLO JSON: {"resumen":"1 frase sobre su armario y su estilo","faltas":[
       const q=g.dataset.q, ptype=g.dataset.type;
       this.disabled=true; this.innerHTML=`${svg('load',16)} …`; this.querySelector('svg').classList.add('spin');
       let box=g.querySelector('.gap-offers'); if(!box){box=document.createElement('div');box.className='gap-offers';g.after(box);}
-      box.innerHTML=`<div class="note" style="margin:8px 0">${svg('load',16)}<span>Buscando según tu estilo…</span></div>`;
+      box.innerHTML=`<div class="sub" style="margin:8px 0 4px">Buscando según tu estilo…</div>`+
+        Array(3).fill(`<div class="skel-offer"><div class="skel"></div><div class="skel-lines"><div class="skel"></div><div class="skel"></div></div></div>`).join('');
       const maxP=u.avgPrice?Math.round(u.avgPrice*1.6):null;
       // dos canales en paralelo: tiendas nuevas y segunda mano, ambos con el perfil
       const [nuevo,used]=await Promise.all([
@@ -1496,7 +1502,7 @@ Devuelve SOLO JSON: {"resumen":"1 frase sobre su armario y su estilo","faltas":[
         searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP,channel:'used'})
       ]);
       if(nuevo===null&&used===null){box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY para ver ofertas reales.</span></div>`;this.disabled=false;this.innerHTML=`${svg('tag',16)} Buscar`;return;}
-      const offerRow=o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`;
+      const offerRow=o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`;
       const nItems=nuevo?[...(nuevo.exact||[]),...(nuevo.alternatives||[])]:[];
       const uItems=used?[...(used.exact||[]),...(used.alternatives||[])]:[];
       let html='';
@@ -1589,7 +1595,7 @@ function vInsights(m){
     <!-- Coste por uso -->
     <div class="shead"><h2>Coste por uso</h2></div>
     <div class="reveal" style="animation-delay:.14s">
-      ${rk.map(g=>`<div class="cpw"><div class="ph"><img src="${g.img||''}"/></div>
+      ${rk.map(g=>`<div class="cpw"><div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/></div>
         <div><div class="nm">${g.brand} · ${g.name}</div><div class="mt">${g.worn} usos</div></div>
         <div class="val"><div class="v" style="color:${cpw(g)>15?'var(--amber)':'var(--eco)'}">${cpw(g).toFixed(2)} €</div><div class="s">por uso</div></div></div>`).join('')}
     </div>`;
@@ -1768,8 +1774,8 @@ function renderWelcome(mode='intro'){
     <div class="word" style="font-size:30px;margin:10px 0 6px">Dro<b>be</b></div>
     <div class="sub" style="margin-bottom:20px">${isSignup?'Tu armario, sincronizado en todos tus dispositivos.':'Entra para recuperar tu armario.'}</div>
     ${!cloud.cloudEnabled()?`<div class="note warn">${svg('spark',18)}<span>Sincronización no disponible. Puedes usar la app en local.</span></div>`:''}
-    <div class="field"><label>Email</label><input id="w_em" type="email" placeholder="tu@email.com"/></div>
-    <div class="field"><label>Contraseña</label><input id="w_pw" type="password" placeholder="Mínimo 6 caracteres"/></div>
+    <div class="field" id="f_em"><label>Email</label><input id="w_em" type="email" inputmode="email" autocomplete="email" autocapitalize="off" placeholder="tu@email.com"/></div>
+    <div class="field" id="f_pw"><label>Contraseña</label><div class="pw-wrap"><input id="w_pw" type="password" autocomplete="${isSignup?'new-password':'current-password'}" placeholder="Mínimo 6 caracteres"/><button type="button" class="pw-eye" id="w_eye" aria-label="Mostrar contraseña">${svg('eye',18)}</button></div></div>
     ${isSignup?`<div class="row2">
       <div class="field"><label>Nombre (opcional)</label><input id="w_name" placeholder="Pepe"/></div>
       <div class="field"><label>Edad (opcional)</label><input id="w_age" inputmode="numeric" placeholder="25"/></div>
@@ -1794,7 +1800,34 @@ function renderWelcome(mode='intro'){
   el.querySelector('#w_skip2').onclick=()=>{markSeen();el.remove();maybeStartTour();};
   let sex='';
   el.querySelectorAll('[data-sex]').forEach(b=>b.onclick=()=>{sex=b.dataset.sex;el.querySelectorAll('[data-sex]').forEach(x=>x.classList.toggle('on',x===b));});
+
+  // Validación en tiempo real + toggle de contraseña
+  const emEl=el.querySelector('#w_em'), pwEl=el.querySelector('#w_pw'), goBtn=el.querySelector('#w_go');
+  const emOk=v=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+  const setFieldErr=(fid,txt)=>{
+    const f=el.querySelector('#'+fid); if(!f)return;
+    f.classList.toggle('invalid',!!txt);
+    let e=f.querySelector('.ferr');
+    if(txt){ if(!e){e=document.createElement('div');e.className='ferr';f.appendChild(e);} e.textContent=txt; }
+    else if(e)e.remove();
+  };
+  const validate=()=>{
+    const okE=emOk(emEl.value.trim()), okP=pwEl.value.length>=6;
+    goBtn.disabled=!(okE&&okP);
+    goBtn.style.opacity=goBtn.disabled?'.55':'1';
+    return okE&&okP;
+  };
+  emEl.addEventListener('blur',()=>setFieldErr('f_em',emEl.value.trim()&&!emOk(emEl.value.trim())?'Este email no parece válido.':''));
+  emEl.addEventListener('input',()=>{ if(emOk(emEl.value.trim()))setFieldErr('f_em',''); validate(); });
+  pwEl.addEventListener('blur',()=>setFieldErr('f_pw',pwEl.value&&pwEl.value.length<6?'Mínimo 6 caracteres.':''));
+  pwEl.addEventListener('input',()=>{ if(pwEl.value.length>=6)setFieldErr('f_pw',''); validate(); });
+  pwEl.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!goBtn.disabled)goBtn.click(); });
+  const eye=el.querySelector('#w_eye');
+  if(eye)eye.onclick=()=>{ const show=pwEl.type==='password'; pwEl.type=show?'text':'password'; eye.style.color=show?'var(--accent)':'var(--ink3)'; };
+  validate();
+
   el.querySelector('#w_go').onclick=async function(){
+    if(!validate())return;
     const em=el.querySelector('#w_em').value.trim(),pw=el.querySelector('#w_pw').value;
     const msg=el.querySelector('#w_msg');
     if(!em||!pw){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">Introduce email y contraseña.</div>`;return;}
@@ -2079,7 +2112,7 @@ async function openFriendTab(el,friendId,tab){
     body.innerHTML=`<div class="note" style="margin-bottom:14px">${svg('spark',16)}<span>Estás viendo su armario. Elige prendas y mándale un look con el botón de abajo.</span></div>
       <div class="grid" id="fr_grid">${garments.map(g=>`
         <div class="gcard" data-pick="${g.id}">
-          <div class="ph">${g.img?`<img src="${esc(g.img)}"/>`:''}<span class="pick-check">${svg('check',16)}</span></div>
+          <div class="ph">${g.img?`<img loading="lazy" decoding="async" src="${esc(g.img)}"/>`:''}<span class="pick-check">${svg('check',16)}</span></div>
           <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div></div>
         </div>`).join('')}</div>
       <button class="btn dark" id="fr_sendlook" style="position:sticky;bottom:16px;margin-top:16px;opacity:.5" disabled>${svg('send',18)} Envíale este look (0)</button>`;
@@ -2113,6 +2146,7 @@ async function openFriendTab(el,friendId,tab){
     const send=async()=>{
       const t=body.querySelector('#chat_text'); const v=t.value.trim(); if(!v)return;
       t.value='';
+      haptic();
       const r=await cloud.sendMessage(friendId,{type:'text',body:v});
       if(r.ok)loadMsgs(); else toast(r.reason||'No se pudo enviar');
     };
@@ -2151,7 +2185,7 @@ async function showLookMessage(payloadStr){
   else { const fw=await cloud.getFriendWardrobe(ownerId); garments=(fw||[]).filter(g=>ids.includes(g.id)); }
   const body=ov.querySelector('#lv_body');
   body.innerHTML=garments&&garments.length?`<div class="grid">${garments.map(g=>`
-    <div class="gcard"><div class="ph">${g.img?`<img src="${esc(g.img)}"/>`:''}</div>
+    <div class="gcard"><div class="ph">${g.img?`<img loading="lazy" decoding="async" src="${esc(g.img)}"/>`:''}</div>
     <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div></div></div>`).join('')}</div>`
     :`<div class="soc-empty">No se pudieron cargar las prendas de este look.</div>`;
 }
@@ -2174,6 +2208,7 @@ function toast(txt){
 ═══════════════════════════════════════════ */
 render();
 initCloud();
+loadWeather();
 if(needsWelcome())setTimeout(()=>renderWelcome('intro'),300);
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 
