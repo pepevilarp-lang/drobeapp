@@ -11,7 +11,10 @@ module.exports = async function handler(req, res) {
     const q = (req.query && req.query.q) || 'ecoalf pantalon lino azul';
     try {
       const url = 'https://serpapi.com/search.json?engine=google_shopping&q=' + encodeURIComponent(q) + '&gl=es&hl=es&api_key=' + key;
-      const r = await fetch(url);
+      const ctrl = new AbortController();
+      const tm = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(tm);
       const data = await r.json();
       res.status(200).json({
         ok: true, query: q, http_status: r.status,
@@ -44,7 +47,10 @@ module.exports = async function handler(req, res) {
   async function serpSearch(q) {
     try {
       const url = 'https://serpapi.com/search.json?engine=google_shopping&q=' + encodeURIComponent(q) + '&gl=' + country + '&hl=es&num=20&api_key=' + key;
-      const r = await fetch(url);
+      const ctrl = new AbortController();
+      const tm = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(tm);
       const data = await r.json();
       if (data && data.error) { console.error('[shopping] SerpApi error:', data.error); lastError = data.error; }
       const n = (data && data.shopping_results) ? data.shopping_results.length : 0;
@@ -76,7 +82,10 @@ module.exports = async function handler(req, res) {
     if(!productId) return null;
     try{
       const url = 'https://serpapi.com/search.json?engine=google_product&product_id=' + encodeURIComponent(productId) + '&gl=' + country + '&hl=es&api_key=' + key;
-      const r = await fetch(url);
+      const ctrl = new AbortController();
+      const tm = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(tm);
       const d = await r.json();
       const sellers = (d.sellers_results && d.sellers_results.online_sellers) || [];
       if(!sellers.length) return null;
