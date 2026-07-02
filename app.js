@@ -111,8 +111,8 @@ const SEED = [
 const KEY = 'drobe.v3';
 let store = load();
 function load(){
-  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];s.tickets=s.tickets||[];return s;}} }catch(e){}
-  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[]};
+  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];s.tickets=s.tickets||[];s.wishlist=s.wishlist||[];s.scanLog=s.scanLog||[];return s;}} }catch(e){}
+  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[]};
 }
 function save(){ try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){} }
 function showSyncWarning(reason){
@@ -385,6 +385,14 @@ REGLAS CRÍTICAS:
 8. Responde SOLO JSON válido.
 {"detected":true,"garment_count":1,"cat":"","brand":"","name":"","fit":"","color":"","colors":[],"material":"","season":"","formality":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0}}`;
 
+const EMAIL_SYSTEM=`Eres un extractor de precisión de emails de confirmación de compra de moda (Zara, Mango, ASOS, Zalando, El Corte Inglés, Nike…).
+REGLAS:
+- No inventes. Si un dato no aparece, déjalo vacío y baja la confianza (0-1).
+- SOLO prendas y calzado: ignora envío, impuestos, descuentos globales y tarjetas regalo.
+- "store": la tienda/marca que envía el email. "dateISO": fecha del pedido en AAAA-MM-DD.
+- Por prenda: "name" (descripción limpia en español), "brand" (si difiere de la tienda), "size" (talla si aparece), "color" (en español si aparece), "price" (precio final de línea), "cat" en español, uno de: ${CATS_DETAIL.join(', ')}.
+Responde SOLO JSON: {"store":"","dateISO":"","total":0,"items":[{"name":"","brand":"","size":"","color":"","price":0,"cat":"","confidence":0}]}`;
+
 const TICKET_SYSTEM=`Eres un sistema OCR de precisión especializado en tickets de tiendas de moda.
 REGLAS:
 - No inventes. Si un dato no se lee con claridad, baja la confianza (0-1) y deja el campo vacío.
@@ -552,6 +560,10 @@ function renderFicha(){
         <button class="btn ghost sell-btn" id="sell_vinted">Preparar para Vinted</button>
       </div>`:''}
       <button class="btn ghost" id="wear" style="margin-top:10px">${svg('check',18)} Marcar como usada hoy</button>
+      <div class="fitfb">
+        <div class="fitfb-l">¿Cómo te queda${g.size?` la talla ${esc(g.size)}`:''}?</div>
+        <div class="fitfb-chips">${['Pequeña','Perfecta','Grande'].map(o=>`<button class="chip ${g.fitFeedback===o?'on':''}" data-ff="${o}">${o}</button>`).join('')}</div>
+      </div>
     </div>`;
   document.body.appendChild(el);
   el.querySelector('#fclose').onclick=closeFicha;
@@ -561,6 +573,7 @@ function renderFicha(){
   el.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>openFicha(b.dataset.c));
   el.querySelector('#sale').onclick=()=>{ g.status=onSale?'uso':'venta'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
   el.querySelector('#wear').onclick=()=>{ haptic(); g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
+  el.querySelectorAll('[data-ff]').forEach(b=>b.onclick=()=>{ haptic(); g.fitFeedback=g.fitFeedback===b.dataset.ff?null:b.dataset.ff; save(); if(session)cloud.pushGarment(g); renderFicha(); });
   if(el.querySelector('#sell_wallapop'))el.querySelector('#sell_wallapop').onclick=()=>prepararVenta(g,'wallapop');
   if(el.querySelector('#sell_vinted'))el.querySelector('#sell_vinted').onclick=()=>prepararVenta(g,'vinted');
   el.querySelector('#docfile').addEventListener('change',ev=>{
@@ -626,29 +639,154 @@ function vAdd(m){
   m.innerHTML=`
     <div class="reveal"><div class="eyebrow">Añadir</div>
     <div class="title">Tu armario,<br>sin escribir nada</div>
-    <div class="sub">Una foto o el ticket. Pipeline de IA especializado en moda. Nunca inventa.</div></div>
+    <div class="sub">Una foto, el ticket o el email de compra. Nunca invento.</div></div>
     <div style="margin-top:24px">
       <button class="opt reveal" id="opt_prenda" style="animation-delay:.05s">
         <span class="ring">${svg('cam',24)}</span>
         <div><div class="t1">Fotografiar prenda</div><div class="t2">Reconocimiento especializado en moda</div></div>
         <span class="arr">${svg('chev',20)}</span></button>
       <input id="pf" type="file" accept="image/*" style="position:absolute;left:-9999px;top:0;opacity:0"/>
-      <button class="opt alt reveal" id="opt_ticket" style="animation-delay:.1s">
+      <button class="opt reveal" id="opt_burst" style="animation-delay:.08s">
+        <span class="ring" style="background:var(--accent)">${svg('spark',24)}</span>
+        <div><div class="t1">Modo ráfaga</div><div class="t2">Sube muchas fotos de golpe · catalogación en cadena</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <input id="bf" type="file" accept="image/*" multiple style="position:absolute;left:-9999px;top:0;opacity:0"/>
+      <button class="opt alt reveal" id="opt_ticket" style="animation-delay:.11s">
         <span class="ring">${svg('scan',24)}</span>
-        <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · ticket vinculado</div></div>
+        <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · garantías y plazos</div></div>
         <span class="arr">${svg('chev',20)}</span></button>
       <input id="tf" type="file" accept="image/*" style="position:absolute;left:-9999px;top:0;opacity:0"/>
-      <button class="opt alt reveal" id="manual" style="animation-delay:.15s">
+      <button class="opt alt reveal" id="opt_mail" style="animation-delay:.14s">
+        <span class="ring">${svg('send',24)}</span>
+        <div><div class="t1">Email de compra</div><div class="t2">Pega el email de confirmación y extraigo las prendas</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <button class="opt alt reveal" id="manual" style="animation-delay:.17s">
         <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pen',24)}</span>
         <div><div class="t1">Añadir manualmente</div><div class="t2">Rellena los datos tú mismo</div></div>
         <span class="arr">${svg('chev',20)}</span></button>
     </div>`;
-  const pf=m.querySelector('#pf'), tf=m.querySelector('#tf');
+  const pf=m.querySelector('#pf'), tf=m.querySelector('#tf'), bf=m.querySelector('#bf');
   m.querySelector('#opt_prenda').onclick=()=>pf.click();
+  m.querySelector('#opt_burst').onclick=()=>bf.click();
   m.querySelector('#opt_ticket').onclick=()=>tf.click();
+  m.querySelector('#opt_mail').onclick=()=>openEmailImport(m);
   pf.onchange=e=>handleScan(m,e,'prenda');
   tf.onchange=e=>handleScan(m,e,'ticket');
+  bf.onchange=e=>handleBurst(m,e);
   m.querySelector('#manual').onclick=()=>showPrenda(m,null,null);
+}
+
+/* ═══ EMAIL DE COMPRA: pegar texto o captura ═══ */
+function openEmailImport(m){
+  addMode='email';
+  m.innerHTML=`
+    <div class="backbar"><button id="eb0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Email de compra</span></div>
+    <div class="reveal">
+      <div class="sub" style="margin:4px 0 16px">Pega el email de confirmación (Zara, ASOS, Zalando…) o sube una captura. Extraigo las prendas con talla, color y precio reales.</div>
+      <textarea id="em_txt" class="mailbox" placeholder="Pega aquí el texto del email…"></textarea>
+      <button class="btn dark" id="em_go" disabled style="margin-top:12px;opacity:.55">${svg('spark',18)} Extraer prendas</button>
+      <div class="mail-or"><span>o</span></div>
+      <button class="btn ghost" id="em_shot">${svg('cam',18)} Subir captura del email</button>
+      <input id="em_file" type="file" accept="image/*" style="position:absolute;left:-9999px;opacity:0"/>
+    </div>`;
+  m.querySelector('#eb0').onclick=()=>{ addMode='choose'; vAdd(m); };
+  const txt=m.querySelector('#em_txt'), go=m.querySelector('#em_go');
+  txt.oninput=()=>{ const ok=txt.value.trim().length>40; go.disabled=!ok; go.style.opacity=ok?'1':'.55'; };
+  go.onclick=async function(){
+    this.disabled=true; this.innerHTML=`${svg('load',18)} Leyendo email…`; this.querySelector('svg').classList.add('spin');
+    let r=await callAI(EMAIL_SYSTEM,'Extrae las prendas de este email de compra:\n\n'+txt.value.trim().slice(0,6000));
+    if(!r) r=await callAI(EMAIL_SYSTEM,'Extrae las prendas de este email de compra:\n\n'+txt.value.trim().slice(0,6000));
+    if(addMode!=='email')return;
+    if(r&&r.items&&r.items.length){
+      haptic(14);
+      // normalizar al formato del ticket y reutilizar su formulario editable
+      r.items.forEach(it=>{ it.cat=normalizeCat(it.cat||''); });
+      m.innerHTML=`<div class="backbar"><button id="eb1" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Email leído</span></div><div id="stage"></div>`;
+      m.querySelector('#eb1').onclick=()=>{ addMode='choose'; vAdd(m); };
+      showTicket(m,{...r,date:r.dateISO||''},null);
+    } else {
+      this.disabled=false; this.innerHTML=`${svg('spark',18)} Extraer prendas`;
+      toast('No pude extraer prendas de ese texto. Prueba con la captura.');
+    }
+  };
+  const ef=m.querySelector('#em_file');
+  m.querySelector('#em_shot').onclick=()=>ef.click();
+  ef.onchange=e=>handleScan(m,e,'ticket'); // la captura del email va por visión, mismo pipeline que el ticket
+}
+
+/* ═══ MODO RÁFAGA: catalogación en cadena ═══ */
+async function handleBurst(m,e){
+  const files=[...(e.target.files||[])].slice(0,20);
+  e.target.value='';
+  if(!files.length)return;
+  addMode='burst';
+  let cancelled=false;
+  const results=[]; // {ok, id, name, brand, low, error}
+  m.innerHTML=`
+    <div class="backbar"><button id="bb0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Modo ráfaga</span></div>
+    <div class="burst-head">
+      <div class="burst-count" id="bcount">0<span>/${files.length}</span></div>
+      <div class="sub" id="bstatus">Catalogando tu armario…</div>
+      <div class="burst-bar"><div id="bbar" style="width:0%"></div></div>
+    </div>
+    <div class="burst-list" id="blist"></div>
+    <button class="btn dark" id="bdone" style="margin-top:16px;display:none">${svg('check',18)} Ver mi armario</button>`;
+  const list=m.querySelector('#blist');
+  m.querySelector('#bb0').onclick=()=>{ cancelled=true; addMode='choose'; vAdd(m); };
+
+  for(let i=0;i<files.length;i++){
+    if(cancelled)return;
+    const row=document.createElement('div'); row.className='burst-row';
+    row.innerHTML=`<div class="br-ph skel"></div><div class="br-info"><div class="br-n">Prenda ${i+1}</div><div class="br-s">Analizando…</div></div><span class="br-state">${svg('load',16)}</span>`;
+    row.querySelector('svg')?.classList.add('spin');
+    list.prepend(row);
+    try{
+      const img=await imageToBase64(files[i],1152,0.85);
+      row.querySelector('.br-ph').outerHTML=`<div class="br-ph"><img src="${img.dataUrl}"/></div>`;
+      let r=await callAI(VISION_SYSTEM,'Analiza esta prenda con máxima precisión.',img);
+      if(!r) r=await callAI(VISION_SYSTEM,'Analiza esta prenda con máxima precisión.',img);
+      if(cancelled)return;
+      if(r&&r.detected){
+        if(r.cat)r.cat=normalizeCat(r.cat);
+        const c=r.confidence||{};
+        const low=Object.values(c).some(v=>v<0.75);
+        const gid='g'+Date.now()+Math.random().toString(36).slice(2,6);
+        addGarment({id:gid,brand:r.brand||'—',name:r.name||r.cat||'Prenda',cat:r.cat||'Otro',catGroup:catToGroup(r.cat||''),
+          fit:r.fit||'Regular Fit',color:r.color||'—',colors:(r.colors&&r.colors.length?r.colors:[r.color||'—']),
+          material:r.material||'',size:'',season:r.season||'Todo el año',formality:r.formality||'Casual',
+          bought:'—',store:'',price:0,cond:'Como nuevo',worn:0,lastWorn:'—',status:'uso',
+          img:img.dataUrl,photos:[],docs:[],tags:[]});
+        results.push({ok:true,id:gid,name:r.name||r.cat,brand:r.brand||'',low});
+        row.querySelector('.br-n').textContent=(r.brand?r.brand+' · ':'')+(r.name||r.cat||'Prenda');
+        row.querySelector('.br-s').textContent=low?'Guardada · revisa los detalles':'Catalogada';
+        row.querySelector('.br-state').innerHTML=low?svg('spark',16):svg('check',16);
+        row.classList.add(low?'low':'ok');
+        row.onclick=()=>openFicha(gid);
+      } else {
+        results.push({ok:false});
+        row.querySelector('.br-n').textContent='Prenda '+(i+1);
+        row.querySelector('.br-s').textContent='No identificada · añádela manualmente';
+        row.querySelector('.br-state').innerHTML='✕';
+        row.classList.add('err');
+      }
+    }catch(err){
+      results.push({ok:false});
+      row.querySelector('.br-s').textContent='Error con esta imagen';
+      row.querySelector('.br-state').innerHTML='✕';
+      row.classList.add('err');
+    }
+    const done=i+1, oks=results.filter(x=>x.ok).length;
+    const bc=m.querySelector('#bcount'), bb=m.querySelector('#bbar');
+    if(bc)bc.innerHTML=`${done}<span>/${files.length}</span>`;
+    if(bb)bb.style.width=Math.round(done/files.length*100)+'%';
+  }
+  if(cancelled)return;
+  haptic(16);
+  const oks=results.filter(x=>x.ok).length, lows=results.filter(x=>x.low).length, errs=results.length-oks;
+  const st=m.querySelector('#bstatus');
+  if(st)st.innerHTML=`<b>${oks} catalogada${oks!==1?'s':''}</b>${lows?` · ${lows} para revisar`:''}${errs?` · ${errs} fallida${errs!==1?'s':''}`:''}`;
+  const doneBtn=m.querySelector('#bdone');
+  if(doneBtn){ doneBtn.style.display='flex'; doneBtn.onclick=()=>{ addMode='choose'; go('armario'); }; }
 }
 
 function handleScan(m,e,kind){
@@ -782,7 +920,7 @@ function showTicket(m,r,img){
     <div id="t_items">
       ${r.items.map((it,i)=>`<div class="titem" data-i="${i}">
         <div class="titem-head">Prenda ${i+1}<button class="titem-del" data-del="${i}">${svg('trash',15)}</button></div>
-        ${garmentFormHTML({brand:it.brand||'',name:it.name||'',cat:it.cat||'',price:it.price||0,color:'',material:'',size:'',fit:'Regular Fit',season:'Todo el año',formality:'Casual',cond:'Nuevo con etiqueta'}, it.confidence?{}:{},'ti'+i+'_')}
+        ${garmentFormHTML({brand:it.brand||'',name:it.name||'',cat:it.cat||'',price:it.price||0,color:it.color||'',material:'',size:it.size||'',fit:'Regular Fit',season:'Todo el año',formality:'Casual',cond:'Nuevo con etiqueta'}, it.confidence?{}:{},'ti'+i+'_')}
       </div>`).join('')}
     </div>
     <button class="btn ghost" id="t_add" style="margin-bottom:14px">${svg('add',16)} Añadir otra prenda del ticket</button>
@@ -849,6 +987,65 @@ function readFormPrefixed(scope,pre){
   const q=id=>{ const e=scope.querySelector('#'+pre+id); return e?e.value.trim():''; };
   return {brand:q('brand'),name:q('name'),cat:q('cat'),fit:q('fit'),color:q('color'),material:q('mat'),
     size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond')};
+}
+
+function saveWishlistItem(w){
+  store.wishlist=store.wishlist||[];
+  w.createdAt=new Date().toISOString();
+  store.wishlist.unshift(w);
+  save();
+  if(session) cloud.saveWishlistCloud(w).then(r=>{ if(r&&!r.ok) showSyncWarning(r.reason); });
+}
+function deleteWishlistItem(id){
+  store.wishlist=(store.wishlist||[]).filter(w=>w.id!==id);
+  save();
+  if(session) cloud.deleteWishlistCloud(id);
+}
+function openWishlist(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='wishlist';
+  const paint=()=>{
+    const items=store.wishlist||[];
+    el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+      <div class="backbar"><button id="wlb">${svg('back',20)}</button><span class="t">Wishlist</span></div>
+      ${items.length?`<div class="sub" style="margin-bottom:14px">Prendas que vigilas. Toca «Revisar precio» para ver el mejor precio de hoy.</div>`:''}
+      ${items.length?'':`<div class="empty" style="padding-top:60px">${svg('heart',28)}<div style="margin-top:12px">Aún no vigilas ninguna prenda.<br>Guárdalas desde «¿Me lo compro?».</div></div>`}
+      ${items.map(w=>`<div class="wl-card" data-id="${w.id}">
+        <div class="wl-ph">${w.thumbnail?`<img loading="lazy" src="${esc(w.thumbnail)}"/>`:svg('heart',20)}</div>
+        <div class="wl-info">
+          <div class="wl-n">${esc(w.desc||((w.brand||'')+' '+(w.tipo||'')))}</div>
+          <div class="wl-meta">${w.lastPrice?`Visto a <b>${Number(w.lastPrice).toFixed(0)}€</b>`:'Sin precio aún'}${w.targetPrice?` · objetivo ${Number(w.targetPrice).toFixed(0)}€`:''}</div>
+          <div class="wl-check" id="chk_${w.id}"></div>
+          <div class="wl-actions">
+            <button class="wl-btn" data-check="${w.id}">${svg('tag',14)} Revisar precio</button>
+            ${w.lastLink?`<a class="wl-btn ghost" href="${esc(w.lastLink)}" target="_blank" rel="noopener">Ver ${esc(w.lastSource||'tienda')}</a>`:''}
+            <button class="wl-del" data-del="${w.id}" aria-label="Quitar">${svg('trash',15)}</button>
+          </div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+    el.querySelector('#wlb').onclick=()=>el.remove();
+    el.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ deleteWishlistItem(b.dataset.del); paint(); });
+    el.querySelectorAll('[data-check]').forEach(b=>b.onclick=async function(){
+      const w=(store.wishlist||[]).find(x=>x.id===this.dataset.check); if(!w)return;
+      this.disabled=true; this.innerHTML=`${svg('load',14)} …`; this.querySelector('svg').classList.add('spin');
+      const u=userContext();
+      const res=await searchOffersExtensive({query:w.query||((w.brand||'')+' '+(w.tipo||'')),brand:w.brand,productType:w.tipo,ownedBrands:u.topBrands,sex:u.sex});
+      const box=el.querySelector('#chk_'+w.id);
+      const best=res&&res.exact&&res.exact[0];
+      if(best){
+        const price=best.price_value||null;
+        const dropped=price&&w.lastPrice&&price<w.lastPrice-0.01;
+        if(box)box.innerHTML=`<div class="wl-now ${dropped?'drop':''}">${dropped?svg('spark',13)+' ¡Ha bajado! ':''}Hoy: <b>${best.price||''}</b> en ${esc(best.source||'')} · <a href="${esc(best.link)}" target="_blank" rel="noopener">ver</a></div>`;
+        if(price){ w.lastPrice=price; w.lastLink=best.link; w.lastSource=best.source; if(best.thumbnail)w.thumbnail=best.thumbnail; save(); if(session)cloud.saveWishlistCloud(w); }
+        if(dropped)haptic(20);
+      } else if(box){
+        box.innerHTML=`<div class="wl-now">Sin resultados ahora mismo para esta búsqueda.</div>`;
+      }
+      this.disabled=false; this.innerHTML=`${svg('tag',14)} Revisar precio`;
+    });
+  };
+  paint();
+  document.body.appendChild(el);
 }
 
 function saveTicket(t){
@@ -1083,12 +1280,20 @@ En "alternativas" propón 3 prendas de OTRAS marcas reales (Mango, Zara, Massimo
         altBox.innerHTML=`<a class="offer" href="${gSearch2(q+(brand?' '+brand:''))}" target="_blank" rel="noopener"><div class="offer-img">${svg('tag',20)}</div><div class="offer-info"><div class="offer-t">Buscar "${q}" en Google Shopping</div><div class="offer-s">Comparar precios</div></div><div class="offer-p">${svg('chev',18)}</div></a>`;
       }
     }
+    const logScan=(bought)=>{
+      store.scanLog=store.scanLog||[];
+      store.scanLog.unshift({brand:brand||'',verdict:r?.veredicto||'',bought,at:new Date().toISOString()});
+      if(store.scanLog.length>200)store.scanLog.length=200;
+      save();
+    };
     out.querySelector('#sc_buy').onclick=()=>{
+      logScan(true); haptic();
       trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'bought'});
       el.remove(); go('add');
       setTimeout(()=>showPrenda(document.getElementById('main'),{brand,name:q,price},null),100);
     };
     out.querySelector('#sc_no').onclick=()=>{
+      logScan(false);
       trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'rejected',rejection_reason:similar.length?'already_have':'user_choice'});
       el.remove();
     };
@@ -1419,11 +1624,20 @@ const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">D</d
 ═══════════════════════════════════════════ */
 function wardrobeSummary(){ return store.garments.filter(g=>g.status!=='venta').map(g=>`${g.cat} ${g.color} (${g.brand})`).join(', '); }
 async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands,sex,channel}){
+  const params={query,brand,productType,maxPrice,ownedBrands,sex,channel};
+  const key=cloud.cacheKey(params);
+  // 1) caché compartida (24h): instantánea y no gasta cuota
+  if(session){
+    const hit=await cloud.searchCacheGet(key);
+    if(hit) return hit;
+  }
   try{
-    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,brand,productType,maxPrice,ownedBrands,sex,channel})});
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(params)});
     const d=await r.json();
     if(!d||!d.available)return null;
-    return {exact:d.exact||[],alternatives:d.alternatives||[]};
+    const out={exact:d.exact||[],alternatives:d.alternatives||[]};
+    if(session&&(out.exact.length||out.alternatives.length)) cloud.searchCachePut(key,out);
+    return out;
   }catch(e){ return null; }
 }
 function openAsesorCompra(){ const el=document.createElement('div'); el.className='ficha'; el.id='asesor'; renderAsesorForm(el); document.body.appendChild(el); }
@@ -1504,6 +1718,22 @@ function renderAsesorForm(el,prefill={}){
       }
     }
     out.innerHTML=html;
+    // Wishlist: guardar como "vigilada" (intención de compra con precio objetivo)
+    const wid='w'+Date.now();
+    const wbar=document.createElement('button');
+    wbar.className='btn ghost'; wbar.style.marginTop='12px';
+    wbar.innerHTML=`${svg('heart',17)} Vigilar precio de esta prenda`;
+    wbar.onclick=function(){
+      const bestNow=(offers&&offers.exact&&offers.exact[0])||null;
+      saveWishlistItem({id:wid,desc,brand:data.brand||'',tipo:data.tipo||'',query:searchQ,
+        targetPrice:parseFloat(data.price)||null,
+        lastPrice:bestNow&&bestNow.price_value?bestNow.price_value:(parseFloat(data.price)||null),
+        lastLink:bestNow?bestNow.link:null,lastSource:bestNow?bestNow.source:null,
+        thumbnail:bestNow?bestNow.thumbnail:null});
+      this.disabled=true; this.innerHTML=`${svg('check',17)} En tu wishlist`;
+      haptic();
+    };
+    out.appendChild(wbar);
     this.disabled=false; this.innerHTML=`${svg('spark',18)} Analizar otra`;
   };
 }
@@ -1697,6 +1927,11 @@ function vPerfil(m){
       <div><div class="t1">Drobe for Brands</div><div class="t2">Demo de la vista para marcas · datos reales agregados</div></div>
       <span class="arr">${svg('chev',20)}</span></button>
 
+    <button class="opt" id="p_wish" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('heart',22)}</span>
+      <div><div class="t1">Wishlist</div><div class="t2">${(store.wishlist||[]).length} prenda(s) vigiladas</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
     <!-- Consentimiento B2B — CRÍTICO para el negocio -->
     <div class="consent-card reveal" style="animation-delay:.04s">
       <div class="cc-head">${svg('dna',18)} Datos y privacidad</div>
@@ -1742,6 +1977,7 @@ function vPerfil(m){
   m.querySelector('#p_maletas')?.addEventListener('click',()=>openMaletasGuardadas());
   m.querySelector('#p_tour')?.addEventListener('click',()=>{ try{localStorage.removeItem('drobe.tour');}catch(e){} startTour(); });
   m.querySelector('#p_b2b')?.addEventListener('click',()=>openB2BDemo());
+  m.querySelector('#p_wish')?.addEventListener('click',()=>openWishlist());
 
   // medidas
   ['altura','peso','pecho','cintura','pie'].forEach(k=>{
@@ -2041,8 +2277,17 @@ function brandStats(brand){
   const cats={}; gs.forEach(g=>{const k=g.catGroup||g.cat||'—';cats[k]=(cats[k]||0)+1;});
   const sizes={}; gs.forEach(g=>{if(g.size)sizes[g.size]=(sizes[g.size]||0)+1;});
   const top=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  // inteligencia de tallaje: feedback real "cómo te queda"
+  const fb={Pequeña:0,Perfecta:0,Grande:0}; let fbN=0;
+  gs.forEach(g=>{ if(g.fitFeedback&&fb[g.fitFeedback]!=null){fb[g.fitFeedback]++;fbN++;} });
+  // contexto cross-marca: qué otras marcas conviven en el mismo armario
+  const others={};
+  store.garments.forEach(g=>{ const b=g.brand; if(b&&b!=='—'&&b.toLowerCase()!==brand.toLowerCase()) others[b]=(others[b]||0)+1; });
+  // intención de compra: prendas de la marca en wishlist
+  const intent=(store.wishlist||[]).filter(w=>(w.brand||'').toLowerCase()===brand.toLowerCase()).length;
   return {n,avgPrice,avgCpw,deadPct:Math.round(dead/n*100),
-    topColors:top(colors),topCats:top(cats),topSizes:top(sizes)};
+    topColors:top(colors),topCats:top(cats),topSizes:top(sizes),
+    fitFb:fb,fitFbN:fbN,coBrands:top(others),wishIntent:intent};
 }
 function openB2BDemo(){
   const brands=[...new Set(store.garments.map(g=>g.brand).filter(b=>b&&b!=='—'))];
@@ -2065,6 +2310,16 @@ function openB2BDemo(){
         <div class="b2b-card"><div class="bn">${s.avgCpw.toFixed(2)}€</div><div class="bl">Coste por uso</div></div>
         <div class="b2b-card ${s.deadPct>=40?'warn':''}"><div class="bn">${s.deadPct}%</div><div class="bl">Prendas dormidas</div></div>
       </div>
+      ${s.fitFbN?`<div class="b2b-sec">Inteligencia de tallaje · feedback real</div>
+      <div class="b2b-signal">${(()=>{const p=Math.round(s.fitFb['Pequeña']/s.fitFbN*100),g=Math.round(s.fitFb['Grande']/s.fitFbN*100);
+        return p>=34?`El <b>${p}%</b> de los compradores dice que ${esc(sel)} <b>talla pequeño</b>. Señal directa de devoluciones evitables.`
+        :g>=34?`El <b>${g}%</b> dice que ${esc(sel)} <b>talla grande</b>. Señal directa de devoluciones evitables.`
+        :`El <b>${Math.round(s.fitFb['Perfecta']/s.fitFbN*100)}%</b> confirma que el tallaje de ${esc(sel)} es fiel. Argumento de venta verificado.`;})()}</div>
+      <div class="b2b-rows" style="margin-top:12px">${['Pequeña','Perfecta','Grande'].map(k=>`<div class="b2b-row"><span>${k}</span><div class="b2b-bar-t"><div style="width:${s.fitFbN?Math.round(s.fitFb[k]/s.fitFbN*100):0}%"></div></div><span class="b2b-pct">${s.fitFbN?Math.round(s.fitFb[k]/s.fitFbN*100):0}%</span></div>`).join('')}</div>`:''}
+      ${s.wishIntent?`<div class="b2b-sec">Intención de compra activa</div>
+      <div class="b2b-signal"><b>${s.wishIntent}</b> prenda${s.wishIntent>1?'s':''} de ${esc(sel)} en wishlists, con precio objetivo declarado. Demanda medible antes de la venta.</div>`:''}
+      ${s.coBrands.length?`<div class="b2b-sec">Convive en armario con</div>
+      <div class="b2b-rows">${s.coBrands.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/store.garments.length*100)}%"></div></div><span class="b2b-pct">${v}</span></div>`).join('')}</div>`:''}
       <div class="b2b-sec">Señal de comportamiento</div>
       <div class="b2b-signal">${s.deadPct>0
         ?`El <b>${s.deadPct}%</b> de las prendas ${esc(sel)} en armarios tienen 3 usos o menos. ${s.deadPct>=40?'Riesgo de percepción de bajo valor por uso.':'Uso saludable del producto.'}`
@@ -2076,6 +2331,33 @@ function openB2BDemo(){
       ${s.topCats.length?`<div class="b2b-sec">Categorías</div>
       <div class="b2b-rows">${s.topCats.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
       `:''}
+      ${(()=>{ // contexto cross-marca: qué más hay en los armarios de sus clientes
+        const others={}; store.garments.forEach(g=>{const b=g.brand; if(b&&b!=='—'&&b.toLowerCase()!==sel.toLowerCase())others[b]=(others[b]||0)+1;});
+        const top=Object.entries(others).sort((a,b)=>b[1]-a[1]).slice(0,3);
+        const allAvg=store.garments.length?store.garments.reduce((x,g)=>x+(+g.price||0),0)/store.garments.length:0;
+        return top.length?`<div class="b2b-sec">Contexto competitivo</div>
+        <div class="b2b-signal">Sus clientes también tienen <b>${top.map(([b])=>esc(b)).join('</b>, <b>')}</b> en el armario, con un ticket medio global de <b>${allAvg.toFixed(0)}€</b>.</div>`:'';
+      })()}
+      ${(()=>{ // funnel de conversión en tienda (registro real de escaneos)
+        const scans=(store.scanLog||[]).filter(x=>(x.brand||'').toLowerCase()===sel.toLowerCase());
+        if(!scans.length)return '';
+        const bought=scans.filter(x=>x.bought).length;
+        const pos=scans.filter(x=>x.verdict==='comprar').length;
+        return `<div class="b2b-sec">Funnel en tienda física</div>
+        <div class="b2b-grid" style="margin-top:10px">
+          <div class="b2b-card"><div class="bn">${scans.length}</div><div class="bl">Escaneos del producto</div></div>
+          <div class="b2b-card"><div class="bn">${Math.round(pos/scans.length*100)}%</div><div class="bl">Veredicto «cómpralo»</div></div>
+          <div class="b2b-card"><div class="bn">${bought}</div><div class="bl">Compras confirmadas</div></div>
+          <div class="b2b-card"><div class="bn">${Math.round(bought/scans.length*100)}%</div><div class="bl">Conversión</div></div>
+        </div>`;
+      })()}
+      ${(()=>{ // demanda latente: wishlist de la marca
+        const wl=(store.wishlist||[]).filter(w=>(w.brand||'').toLowerCase()===sel.toLowerCase());
+        if(!wl.length)return '';
+        const avgT=wl.filter(w=>w.targetPrice).reduce((x,w)=>x+ +w.targetPrice,0)/(wl.filter(w=>w.targetPrice).length||1);
+        return `<div class="b2b-sec">Demanda latente</div>
+        <div class="b2b-signal"><b>${wl.length}</b> producto${wl.length>1?'s':''} de ${esc(sel)} en wishlist vigilando precio${avgT?`, con precio objetivo medio de <b>${avgT.toFixed(0)}€</b>`:''}. Intención de compra declarada, no inferida.</div>`;
+      })()}
       <div class="b2b-foot">${svg('lock',14)} Demo con los datos agregados de tu propio armario. En producción: agregados anónimos de miles de usuarios, solo con consentimiento explícito.</div>
     </div>`;
     el.querySelector('#bb').onclick=()=>el.remove();
@@ -2380,6 +2662,11 @@ async function syncFromCloud(){
   const tks=await cloud.pullTickets();
   if(tks){
     store.tickets=tks.map(t=>({id:t.id,store:t.store,dateISO:t.date,total:t.total,returnDays:t.return_days,warrantyMonths:t.warranty_months,img:t.img,garmentIds:t.garment_ids||[],items:t.items||[],createdAt:t.created_at}));
+  }
+  // traer wishlist
+  const wls=await cloud.pullWishlist();
+  if(wls){
+    store.wishlist=wls.map(w=>({id:w.id,desc:w.description,brand:w.brand,tipo:w.tipo,query:w.query,targetPrice:w.target_price,lastPrice:w.last_price,lastLink:w.last_link,lastSource:w.last_source,thumbnail:w.thumbnail,createdAt:w.created_at}));
   }
   save();
   render();
