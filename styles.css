@@ -39,13 +39,16 @@ main{flex:1;padding:0 22px 120px}
   border:1px solid rgba(233,229,221,.9);border-radius:999px;padding:8px 10px;box-shadow:var(--s2)}
 .nav-in button{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink3);padding:5px 10px;border-radius:999px;transition:color .3s var(--ease)}
 .nav-in button.on{color:var(--ink)}
+.nav-in button svg{transition:transform .35s var(--ease)}
+.nav-in button.on svg{transform:translateY(-1px) scale(1.08)}
 .nav-in .lbl{font-size:10px;font-weight:600;letter-spacing:-.01em}
 .nav-in .add{background:var(--ink);color:#fff;width:42px;height:42px;border-radius:999px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px -6px rgba(20,22,27,.5);transition:transform .25s var(--ease)}
 .nav-in .add:active{transform:scale(.92)}
 
 .reveal{opacity:0;transform:translateY(14px);animation:reveal .6s var(--ease) forwards}
 @keyframes reveal{to{opacity:1;transform:none}}
-.fade{animation:fade .45s var(--ease)}@keyframes fade{from{opacity:0}to{opacity:1}}
+.fade{animation:pageIn .5s var(--ease)}@keyframes pageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
 
 /* view segmented control */
 .viewseg{display:inline-flex;background:var(--surface);border:1px solid var(--hair);border-radius:999px;padding:4px;box-shadow:var(--s1);gap:2px}
@@ -452,3 +455,79 @@ main{flex:1;padding:0 22px 120px}
 .chat-input input{flex:1;background:var(--surface);border:1px solid var(--hair);border-radius:999px;padding:0 18px;font-size:15px;color:var(--ink)}
 .chat-input button{width:48px;height:48px;border-radius:999px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;flex:none}
 .chat-input button svg{stroke:#fff}
+
+/* ═══ DESIGN SYSTEM · CAPA DE CALIDAD ═══ */
+
+/* Accesibilidad: foco visible solo con teclado, coherente en toda la app */
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+button:focus-visible,.opt:focus-visible,.chip:focus-visible{outline-offset:3px}
+input:focus,select:focus,textarea:focus{border-color:var(--ink) !important}
+
+/* Respeto a usuarios con sensibilidad al movimiento */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
+}
+
+/* Estados de pulsación consistentes en TODOS los elementos interactivos */
+.gcard:active .ph{transform:scale(.985);transition-duration:.15s}
+.tk-card:active,.friend-row:active,.maleta-card:active{transform:scale(.99)}
+.tk-card,.friend-row,.maleta-card{transition:transform .2s var(--ease)}
+.chip:active,.vseg:active,.intent button:active{transform:scale(.96)}
+.fr-btn:active,.tour-next:active,.gap-btn:active{transform:scale(.95)}
+.fr-btn,.tour-next,.gap-btn,.chip,.vseg{transition:transform .18s var(--ease),background .2s var(--ease)}
+
+/* Skeleton loading elegante (shimmer sutil, tono papel) */
+.skel{position:relative;overflow:hidden;background:var(--hair-2);border-radius:12px}
+.skel::after{content:'';position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);
+  animation:shimmer 1.4s infinite}
+@keyframes shimmer{100%{transform:translateX(100%)}}
+.skel-offer{display:flex;gap:12px;align-items:center;padding:10px 0}
+.skel-offer .skel:first-child{width:48px;height:60px;flex:none}
+.skel-offer .skel-lines{flex:1;display:flex;flex-direction:column;gap:7px}
+.skel-offer .skel-lines .skel{height:12px}
+.skel-offer .skel-lines .skel:last-child{width:55%}
+
+/* Imágenes: aparición suave al cargar (evita el "pop" brusco) */
+.ph img,.offer-img img,.tk-thumb img{animation:imgIn .45s var(--ease)}
+@keyframes imgIn{from{opacity:0}to{opacity:1}}
+
+/* Inputs premium: transición de borde y placeholder */
+input,select{transition:border-color .25s var(--ease),box-shadow .25s var(--ease)}
+input::placeholder{color:var(--ink3);opacity:.75}
+.field input:focus,.field select:focus{box-shadow:0 0 0 3px rgba(181,71,31,.08)}
+
+/* Validación inline elegante */
+.field.invalid input{border-color:var(--danger)}
+.field .ferr{font-size:12px;color:var(--danger);margin-top:5px;animation:fade .2s var(--ease)}
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:44px}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:var(--ink3);border-radius:10px}
+
+/* Safe areas y scroll con inercia en overlays */
+.ficha{-webkit-overflow-scrolling:touch}
+
+/* Tap targets mínimos 44px en iconos pequeños */
+.titem-del,.tk-del,.maleta-del{min-width:34px;min-height:34px}
+
+/* ═══ DETALLE WOW ═══ */
+/* Hero del look: zoom lentísimo tipo editorial (Ken Burns sutil) */
+.hero-look .hl-ph img{animation:heroZoom 14s var(--ease) forwards}
+@keyframes heroZoom{from{transform:scale(1)}to{transform:scale(1.06)}}
+
+/* Números con alineación tabular en datos (no bailan al cambiar) */
+.stat .n,.offer-p,.spec .v,.sc-num,.tk-meta{font-variant-numeric:tabular-nums}
+
+/* Selección de texto en color de marca */
+::selection{background:var(--accent-soft);color:var(--accent)}
+
+/* Botón oscuro: profundidad al pulsar */
+.btn.dark:active{box-shadow:0 4px 12px -6px rgba(20,17,14,.5)}
+
+/* Chips activos con acento cálido */
+.chip.on{background:var(--noir);color:#fff;border-color:var(--noir)}
+
+/* Scroll horizontal con snap suave en carruseles */
+.compat,.maleta-thumbs{scroll-snap-type:x proximity}
+.compat .it,.maleta-thumbs .mt{scroll-snap-align:start}
