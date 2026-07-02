@@ -143,8 +143,8 @@ const cpw = g => g.price/Math.max(g.worn,1);
    Calcula el perfil completo del usuario a partir de su armario real.
    Este objeto es el activo que las marcas pagan por conocer.
 ═══════════════════════════════════════════ */
-function computeStyleDNA(){
-  const gs = store.garments.filter(g=>g.status!=='venta');
+function computeStyleDNA(ctx='calle'){
+  const gs = store.garments.filter(g=>g.status!=='venta'&&(g.context||'calle')===ctx);
   if(!gs.length) return {};
   const count = gs.length;
   // marcas
@@ -252,15 +252,17 @@ function computeDrobeScore(){
 /* ═══════════════════════════════════════════
    TRACKING B2B (eventos que informan a marcas)
 ═══════════════════════════════════════════ */
+/* Eventos de uso: mejoran las recomendaciones de Drobe.
+   Se envían solo con el consentimiento «Mejorar Drobe con mis datos». */
 function trackScanEvent(data){
-  if(!store.profile?.consent_data_b2b) return;
+  if(!store.profile?.consent_analytics) return;
   const events=JSON.parse(localStorage.getItem('drobe.scan_events')||'[]');
   events.push({...data, ts: new Date().toISOString()});
   localStorage.setItem('drobe.scan_events', JSON.stringify(events.slice(-100)));
   if(session) cloud.trackEvent('scan', data).catch(()=>{});
 }
 function trackPurchaseEvent(data){
-  if(!store.profile?.consent_data_b2b) return;
+  if(!store.profile?.consent_analytics) return;
   if(session) cloud.trackEvent('purchase', data).catch(()=>{});
 }
 
@@ -281,6 +283,10 @@ function garmentFormHTML(p={},c={},pre='f_'){
   const isTicket=pre!=='f_';
   return `
   <div class="field"><label>Marca ${c.brand!=null?confBadge(c.brand):''}</label><input id="${pre}brand" value="${esc(p.brand)}" placeholder="Nike, Zara, Stone Island…"/></div>
+  <div class="row2">
+    <div class="field"><label>Contexto</label><select id="${pre}ctx"><option value="calle" ${p.context!=='deporte'?'selected':''}>Calle</option><option value="deporte" ${p.context==='deporte'?'selected':''}>Deporte</option></select></div>
+    <div class="field"><label>Disciplina</label><select id="${pre}sport"><option value="">—</option>${SPORTS.map(x=>`<option ${p.sport===x?'selected':''}>${x}</option>`).join('')}</select></div>
+  </div>
   <div class="field"><label>Nombre / modelo ${c.name!=null?confBadge(c.name):''}</label><input id="${pre}name" value="${esc(p.name)}" placeholder="Parka técnica negra"/></div>
   <div class="row2">
     <div class="field"><label>Tipo ${c.cat!=null?confBadge(c.cat):''}</label><select id="${pre}cat">${optSel(CATS_DETAIL,p.cat||p.category)}</select></div>
@@ -307,7 +313,7 @@ function garmentFormHTML(p={},c={},pre='f_'){
 function readForm(scope){
   const q=id=>{ const e=scope.querySelector('#'+id); return e?e.value.trim():''; };
   const color=q('f_color');
-  return {brand:q('f_brand'),name:q('f_name')||'Prenda',cat:q('f_cat'),fit:q('f_fit'),color,colors:[color],material:q('f_mat'),size:q('f_size'),price:parseFloat(q('f_price'))||0,season:q('f_season'),formality:q('f_form'),cond:q('f_cond'),store:q('f_store')};
+  return {brand:q('f_brand'),name:q('f_name')||'Prenda',cat:q('f_cat'),fit:q('f_fit'),color,colors:[color],material:q('f_mat'),size:q('f_size'),price:parseFloat(q('f_price'))||0,season:q('f_season'),formality:q('f_form'),cond:q('f_cond'),store:q('f_store'),context:q('f_ctx')||'calle',sport:q('f_ctx')==='deporte'?q('f_sport'):''};
 }
 
 /* ═══════════════════════════════════════════
@@ -382,8 +388,9 @@ REGLAS CRÍTICAS:
 5. 'brand': solo si ves logotipo, bordado o etiqueta legible. Si no, "" con confianza 0.
 6. 'color' y 'colors' EN ESPAÑOL (Blanco, Crudo, Negro, Gris, Marino, Azul, Verde, Beige, Marrón, Mostaza, Rojo…). 'material' en español si es identificable por textura (Algodón, Lino, Lana, Denim, Piel, Poliéster…), si no "".
 7. Confianza 0.0–1.0 por campo. Menos de 0.75 = campo incierto.
-8. Responde SOLO JSON válido.
-{"detected":true,"garment_count":1,"cat":"","brand":"","name":"","fit":"","color":"","colors":[],"material":"","season":"","formality":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0}}`;
+8. 'context': "deporte" si es prenda técnica/deportiva (maillot, culotte, mallas running, camiseta técnica, zapatillas de correr, bañador de nadar, neopreno…), si no "calle". Si es deporte, 'sport' es una de: Run, Ciclismo, Natación, Gym, Pádel/Tenis, Fútbol, Outdoor. Marcas como MAAP, Pas Normal Studios, Saysky, Rapha, Castelli, Ciele, Satisfy, Soar, Hoka, On son señal fuerte de deporte.
+9. Responde SOLO JSON válido.
+{"detected":true,"garment_count":1,"cat":"","brand":"","name":"","fit":"","color":"","colors":[],"material":"","season":"","formality":"","context":"calle","sport":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0}}`;
 
 const EMAIL_SYSTEM=`Eres un extractor de precisión de emails de confirmación de compra de moda (Zara, Mango, ASOS, Zalando, El Corte Inglés, Nike…).
 REGLAS:
@@ -408,7 +415,7 @@ Responde SOLO JSON: {"store":"","date":"","dateISO":"","total":0,"items":[{"name
    ROUTER
 ═══════════════════════════════════════════ */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', wardQuery='', fichaId=null, addMode='choose';
+let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', wardQuery='', wardContext='calle', fichaId=null, addMode='choose';
 const app=document.getElementById('app');
 const TABS=[
   {k:'armario',i:'shirt',l:'Armario'},
@@ -472,25 +479,40 @@ function vArmario(m){
       }catch(e){ wardMode='grid'; vArmario(m); }
     });
   } else {
-    const cats=['Todo','En venta',...new Set(store.garments.map(g=>g.catGroup||g.cat))];
+    const inCtx=g=>(g.context||'calle')===wardContext;
+    const ctxGarments=store.garments.filter(inCtx);
+    const cats=wardContext==='deporte'
+      ?['Todo',...new Set(ctxGarments.map(g=>g.sport).filter(Boolean))]
+      :['Todo','En venta',...new Set(ctxGarments.map(g=>g.catGroup||g.cat))];
+    if(!cats.includes(gridFilter))gridFilter='Todo';
     const norm=s=>(s||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
     const matchQ=g=>{
       if(!wardQuery)return true;
       const q=norm(wardQuery);
-      return [g.brand,g.name,g.cat,g.catGroup,g.color,(g.colors||[]).join(' '),g.material,g.size,g.store].some(v=>norm(v).includes(q));
+      return [g.brand,g.name,g.cat,g.catGroup,g.color,(g.colors||[]).join(' '),g.material,g.size,g.store,g.sport].some(v=>norm(v).includes(q));
     };
-    const filterList=()=>store.garments
-      .filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':(g.catGroup||g.cat)===gridFilter)
+    const filterList=()=>ctxGarments
+      .filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':wardContext==='deporte'?g.sport===gridFilter:(g.catGroup||g.cat)===gridFilter)
       .filter(matchQ);
+    const kmBadge=g=>{
+      if(wardContext!=='deporte'||g.km==null)return '';
+      const warn=g.km>=600;
+      return `<span class="tag ${warn?'sale':''}" style="top:auto;bottom:10px">${Math.round(g.km)} km${warn?' · renovar':''}</span>`;
+    };
     const gridHTML=list=>list.length
       ?list.map((g,i)=>`<div class="gcard reveal" data-g="${g.id}" style="animation-delay:${Math.min(i,10)*0.04}s">
-        <div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}</div>
-        <div class="cap"><div class="b">${g.brand}</div><div class="n">${g.name}</div><div class="m">${g.cat} · ${g.color}</div></div></div>`).join('')
-      :`<div class="ward-empty">${svg('search',22)}<div>Nada que encaje con «${esc(wardQuery)}»${gridFilter!=='Todo'?` en ${esc(gridFilter)}`:''}.</div></div>`;
+        <div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}${kmBadge(g)}</div>
+        <div class="cap"><div class="b">${g.brand}</div><div class="n">${g.name}</div><div class="m">${wardContext==='deporte'&&g.sport?g.sport+' · ':''}${g.cat} · ${g.color}</div></div></div>`).join('')
+      :`<div class="ward-empty">${svg('search',22)}<div>${wardQuery?`Nada que encaje con «${esc(wardQuery)}»`:wardContext==='deporte'?'Aún no tienes prendas deportivas.<br>Al escanear un maillot o unas zapatillas, Drobe las clasifica solo.':'Nada por aquí.'}</div></div>`;
     ward.innerHTML=`
+      <div class="viewseg ctxseg" style="margin-top:16px">
+        <button class="vseg ${wardContext==='calle'?'on':''}" data-ctx="calle">${svg('hanger',15)} Calle</button>
+        <button class="vseg ${wardContext==='deporte'?'on':''}" data-ctx="deporte">${svg('spark',15)} Deporte</button>
+      </div>
       <div class="ward-search"><span class="ws-ico">${svg('search',17)}</span><input id="wq" placeholder="Marca, color, tipo, talla…" value="${esc(wardQuery)}" autocapitalize="off" autocorrect="off"/>${wardQuery?`<button class="ws-clear" id="wqc" aria-label="Limpiar">✕</button>`:''}</div>
       <div class="chips" style="margin-top:12px">${cats.map(c=>`<button class="chip ${gridFilter===c?'on':''}" data-f="${c}">${c}</button>`).join('')}</div>
       <div class="grid" id="wgrid">${gridHTML(filterList())}</div>`;
+    ward.querySelectorAll('[data-ctx]').forEach(b=>b.onclick=()=>{ if(wardContext!==b.dataset.ctx){wardContext=b.dataset.ctx;gridFilter='Todo';vArmario(m);} });
     const grid=ward.querySelector('#wgrid');
     const bindCards=()=>grid.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>openFicha(b.dataset.g));
     bindCards();
@@ -564,6 +586,14 @@ function renderFicha(){
         <div class="fitfb-l">¿Cómo te queda${g.size?` la talla ${esc(g.size)}`:''}?</div>
         <div class="fitfb-chips">${['Pequeña','Perfecta','Grande'].map(o=>`<button class="chip ${g.fitFeedback===o?'on':''}" data-ff="${o}">${o}</button>`).join('')}</div>
       </div>
+      ${(g.context==='deporte')?`<div class="km-box">
+        <div class="km-head"><span>Kilometraje${g.stravaGear?' · Strava':''}</span>${g.km>=600?`<span class="km-warn">${svg('spark',12)} Zona de renovación</span>`:''}</div>
+        <div class="km-row">
+          <input id="km_in" inputmode="numeric" value="${g.km!=null?Math.round(g.km):''}" placeholder="0"/>
+          <span class="km-unit">km</span>
+          ${[5,10,21].map(k=>`<button class="chip" data-km="${k}">+${k}</button>`).join('')}
+        </div>
+      </div>`:''}
     </div>`;
   document.body.appendChild(el);
   el.querySelector('#fclose').onclick=closeFicha;
@@ -574,6 +604,11 @@ function renderFicha(){
   el.querySelector('#sale').onclick=()=>{ g.status=onSale?'uso':'venta'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
   el.querySelector('#wear').onclick=()=>{ haptic(); g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
   el.querySelectorAll('[data-ff]').forEach(b=>b.onclick=()=>{ haptic(); g.fitFeedback=g.fitFeedback===b.dataset.ff?null:b.dataset.ff; save(); if(session)cloud.pushGarment(g); renderFicha(); });
+  const kmIn=el.querySelector('#km_in');
+  if(kmIn){
+    kmIn.onchange=()=>{ const v=parseFloat(kmIn.value); g.km=isNaN(v)?null:v; save(); if(session)cloud.pushGarment(g); renderFicha(); };
+    el.querySelectorAll('[data-km]').forEach(b=>b.onclick=()=>{ haptic(); g.km=(Number(g.km)||0)+Number(b.dataset.km); save(); if(session)cloud.pushGarment(g); renderFicha(); });
+  }
   if(el.querySelector('#sell_wallapop'))el.querySelector('#sell_wallapop').onclick=()=>prepararVenta(g,'wallapop');
   if(el.querySelector('#sell_vinted'))el.querySelector('#sell_vinted').onclick=()=>prepararVenta(g,'vinted');
   el.querySelector('#docfile').addEventListener('change',ev=>{
@@ -754,6 +789,7 @@ async function handleBurst(m,e){
         addGarment({id:gid,brand:r.brand||'—',name:r.name||r.cat||'Prenda',cat:r.cat||'Otro',catGroup:catToGroup(r.cat||''),
           fit:r.fit||'Regular Fit',color:r.color||'—',colors:(r.colors&&r.colors.length?r.colors:[r.color||'—']),
           material:r.material||'',size:'',season:r.season||'Todo el año',formality:r.formality||'Casual',
+          context:r.context==='deporte'?'deporte':'calle',sport:r.context==='deporte'?(r.sport||''):'',
           bought:'—',store:'',price:0,cond:'Como nuevo',worn:0,lastWorn:'—',status:'uso',
           img:img.dataUrl,photos:[],docs:[],tags:[]});
         results.push({ok:true,id:gid,name:r.name||r.cat,brand:r.brand||'',low});
@@ -962,7 +998,7 @@ function showTicket(m,r,img){
       if(!d.cat && !d.brand && !d.name) return; // vacía, ignorar
       const gid='g'+Date.now()+Math.random().toString(36).slice(2,6);
       garmentIds.push(gid);
-      const g={id:gid,brand:d.brand||'—',name:d.name||d.cat||'Prenda',cat:d.cat||'Otro',catGroup:catToGroup(d.cat||''),
+      const g={id:gid,context:d.context||'calle',sport:d.sport||'',brand:d.brand||'—',name:d.name||d.cat||'Prenda',cat:d.cat||'Otro',catGroup:catToGroup(d.cat||''),
         fit:d.fit||'Regular Fit',color:d.color||'—',colors:[d.color||'—'],material:d.material||'',size:d.size||'',
         season:d.season||'Todo el año',formality:d.formality||'Casual',bought:dateISO,store:store_,price:parseFloat(d.price)||0,
         cond:d.cond||'Nuevo con etiqueta',worn:0,lastWorn:'—',status:'uso',img:ticketImgUrl||'./assets/silbon-raquetas-white.png',
@@ -986,7 +1022,7 @@ function showTicket(m,r,img){
 function readFormPrefixed(scope,pre){
   const q=id=>{ const e=scope.querySelector('#'+pre+id); return e?e.value.trim():''; };
   return {brand:q('brand'),name:q('name'),cat:q('cat'),fit:q('fit'),color:q('color'),material:q('mat'),
-    size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond')};
+    size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond'),context:q('ctx')||'calle',sport:q('ctx')==='deporte'?q('sport'):''};
 }
 
 function saveWishlistItem(w){
@@ -1588,17 +1624,20 @@ function pickOutfit(){
   return [top,s].filter(Boolean);
 }
 function vEstilista(m){
-  const intents=[['hoy','¿Qué me pongo hoy?'],['viaje','Preparar viaje'],['tienda','Estoy en tienda'],['comprar','¿Me lo compro?'],['hueco','¿Qué me falta?'],['muerta','¿Qué no uso?'],['vender','¿Qué vendo?']];
+  const intents=[['hoy','¿Qué me pongo hoy?'],['salir','Salir a entrenar'],['viaje','Preparar viaje'],['tienda','Estoy en tienda'],['comprar','¿Me lo compro?'],['hueco','¿Qué me falta?'],['muerta','¿Qué no uso?'],['vender','¿Qué vendo?']];
+  if(store.profile?.consent_marketing) intents.splice(1,0,['parati','Seleccionado para ti']);
   m.innerHTML=`<div class="reveal"><div class="eyebrow">Estilista</div>
     <div class="title">Tu asesor<br>de imagen</div>
     <div class="sub">Decisiones reales sobre tu ropa. Nunca sobre la que no tienes.</div></div>
     <div class="intent reveal" style="animation-delay:.05s">${intents.map(x=>`<button data-i="${x[0]}">${x[1]}</button>`).join('')}</div>
     <div id="adv">${advisorCard(stylistMsg||defaultAdvice())}</div>`;
   m.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.i==='salir'){openSalida();return;}
     if(b.dataset.i==='viaje'){openMaleta();return;}
     if(b.dataset.i==='tienda'){openScannerTienda();return;}
     if(b.dataset.i==='comprar'){openAsesorCompra();return;}
     if(b.dataset.i==='hueco'){openHuecos();return;}
+    if(b.dataset.i==='parati'){openParaTi();return;}
     const a=document.getElementById('adv'); a.style.opacity='0';
     setTimeout(()=>{stylistMsg=advice(b.dataset.i);a.innerHTML=advisorCard(stylistMsg);a.style.transition='opacity .4s var(--ease)';a.style.opacity='1';bindOutfit(a);},170);
   });
@@ -1746,6 +1785,91 @@ function readAsesorForm(el){
 function buildDesc(d){ return [d.brand,d.tipo,d.manga,d.knit,d.outer?.join(', '),d.fit,d.color,d.material,d.talla?'talla '+d.talla:'',d.notes].filter(Boolean).join(' ')||'prenda sin especificar'; }
 function buildSearchQuery(d){ return [d.brand,d.tipo?.toLowerCase(),d.color&&d.color!=='Multicolor'?d.color.toLowerCase():'',d.material&&d.material!=='...'?d.material.toLowerCase():'',d.talla].filter(Boolean).join(' ')||d.tipo||'ropa'; }
 
+/* ═══ PARA TI: recomendaciones personalizadas REALES ═══
+   Productos de verdad (Google Shopping) según las marcas del usuario,
+   su categoría más usada, su sexo y su rango de gasto. Sin patrocinios. */
+/* ═══ SALIR A ENTRENAR: kit según el tiempo REAL y TU armario deportivo ═══ */
+async function openSalida(){
+  const sportGs=store.garments.filter(g=>g.context==='deporte'&&g.status!=='venta');
+  if(!sportGs.length){ toast('Añade prendas deportivas para usar el asesor de salida'); return; }
+  const sports=[...new Set(sportGs.map(g=>g.sport).filter(Boolean))];
+  const el=document.createElement('div'); el.className='ficha'; el.id='salida';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="slb">${svg('back',20)}</button><span class="t">Salir a entrenar</span></div>
+    <div class="eyebrow">${WEATHER.city}${WEATHER.temp!=null?` · ${WEATHER.temp}° · ${WEATHER.label||''}`:''}</div>
+    <div class="title" style="font-size:30px">¿Qué toca hoy?</div>
+    <div class="chips" style="margin:16px 0">${(sports.length?sports:SPORTS).map(x=>`<button class="chip" data-sp="${x}">${x}</button>`).join('')}</div>
+    <div id="sl_out"></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#slb').onclick=()=>el.remove();
+  el.querySelectorAll('[data-sp]').forEach(b=>b.onclick=async()=>{
+    el.querySelectorAll('[data-sp]').forEach(x=>x.classList.toggle('on',x===b));
+    const sp=b.dataset.sp;
+    const out=el.querySelector('#sl_out');
+    out.innerHTML=`<div class="skel" style="height:110px;border-radius:16px"></div>`;
+    const pool=sportGs.filter(g=>!g.sport||g.sport===sp);
+    const listado=pool.map(g=>`${g.id}: ${g.brand} ${g.name} (${g.cat}${g.km!=null?`, ${Math.round(g.km)}km`:''})`).join('\n');
+    const wx=WEATHER.temp!=null?`${WEATHER.temp}°C, ${WEATHER.label||''}`:'tiempo desconocido';
+    const sys=`Eres el asesor deportivo de Drobe. Eliges el kit para entrenar SOLO de las prendas listadas (por id). Devuelve SOLO JSON: {"consejo":"1-2 frases sobre cómo vestirse hoy para ${sp} con este tiempo","ids":["id1","id2"],"aviso":"si alguna zapatilla supera 600km, menciónalo, si no vacío"}. Máximo 4 ids. Si falta algo esencial para este tiempo, dilo en el consejo sin inventar prendas.`;
+    let r=await callAI(sys,`Tiempo en ${WEATHER.city}: ${wx}.\nDeporte: ${sp}.\nPrendas disponibles:\n${listado}`);
+    if(!r) r=await callAI(sys,`Tiempo: ${wx}. Deporte: ${sp}. Prendas:\n${listado}`);
+    if(!el.isConnected)return;
+    if(!r){ out.innerHTML=`<div class="note warn">${svg('spark',16)}<span>No pude generar el kit ahora mismo. Prueba de nuevo.</span></div>`; return; }
+    const picks=(r.ids||[]).map(id=>pool.find(g=>g.id===id)).filter(Boolean);
+    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Kit de hoy<span>${sp} · ${wx}</span></div></div>
+      <div class="say">${esc(r.consejo||'')}</div>
+      ${r.aviso?`<div class="sub" style="margin-top:8px;color:#E8A87C">${esc(r.aviso)}</div>`:''}
+      ${picks.length?`<div class="outfit">${picks.map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" src="${g.img||''}"/></div><div class="l">${esc(g.brand)} ${esc(g.name)}</div></div>`).join('')}</div>`:''}
+    </div>`;
+    bindOutfit(out);
+  });
+}
+
+async function openParaTi(){
+  if(!store.profile?.consent_marketing){ toast('Activa las recomendaciones en Perfil'); return; }
+  const u=userContext();
+  if(!u.topBrands.length){ toast('Añade prendas con marca para poder recomendarte'); return; }
+  const el=document.createElement('div'); el.className='ficha'; el.id='parati';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="ptb">${svg('back',20)}</button><span class="t">Seleccionado para ti</span></div>
+    <div class="sub" style="margin-bottom:14px">Según tus marcas (${u.topBrands.slice(0,3).map(esc).join(', ')}), tu estilo y lo que sueles gastar.</div>
+    <div class="pt-grid" id="ptgrid">${Array(6).fill('<div><div class="skel" style="aspect-ratio:3/4"></div><div class="skel" style="height:11px;margin-top:8px"></div></div>').join('')}</div>
+    <div class="b2b-foot" style="color:var(--ink3)">${svg('lock',13)} Productos reales de Google Shopping. Nadie paga por aparecer aquí.</div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#ptb').onclick=()=>el.remove();
+
+  // categoría más usada del armario → palabra de búsqueda
+  const catCount={}; store.garments.forEach(g=>{const k=g.catGroup||g.cat||'';if(k)catCount[k]=(catCount[k]||0)+1;});
+  const topGroups=Object.entries(catCount).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  const W={'Camisas':'camisa','Camisetas':'camiseta','Pantalones':'pantalón','Jerséis/Sudaderas':'jersey','Abrigos/Chaquetas':'chaqueta','Abrigos':'abrigo','Calzado':'zapatillas','Vestidos':'vestido','Faldas':'falda'};
+  const words=topGroups.map(g=>W[g]||String(g).split('/')[0].toLowerCase()).filter(Boolean);
+  const w1=words[0]||'camisa', w2=words[1]||w1;
+  const maxP=u.avgPrice?Math.round(u.avgPrice*1.8):null;
+  const queries=[
+    {query:`${u.topBrands[0]} ${w1}`,brand:u.topBrands[0],productType:w1},
+    u.topBrands[1]?{query:`${u.topBrands[1]} ${w2}`,brand:u.topBrands[1],productType:w2}:null,
+    u.topBrands[2]?{query:`${u.topBrands[2]} ${w1}`,brand:u.topBrands[2],productType:w1}:null,
+  ].filter(Boolean);
+
+  const results=await Promise.all(queries.map(q=>searchOffersExtensive({...q,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP})));
+  const seen=new Set(); const items=[];
+  results.forEach(r=>{ if(r)[...(r.exact||[]),...(r.alternatives||[])].forEach(o=>{ const k=(o.title||'')+(o.price||''); if(o.title&&!seen.has(k)){seen.add(k);items.push(o);} }); });
+
+  const grid=el.querySelector('#ptgrid'); if(!grid)return;
+  if(!items.length){
+    grid.outerHTML=`<div class="soc-empty" style="padding:30px 0">${results.every(r=>r===null)?'Activa SERPAPI_KEY en Vercel para ver productos reales.':'Sin resultados ahora mismo para tus marcas. Prueba más tarde.'}</div>`;
+    return;
+  }
+  grid.innerHTML=items.slice(0,8).map(o=>`
+    <a class="pt-card" href="${esc(o.link)}" target="_blank" rel="noopener">
+      <div class="pt-ph">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}"/>`:svg('tag',22)}</div>
+      <div class="pt-n">${esc(o.title)}</div>
+      <div class="pt-m"><b>${esc(o.price||'')}</b> · ${esc(o.source||'')}</div>
+    </a>`).join('');
+}
+
 async function openHuecos(){
   const el=document.createElement('div'); el.className='ficha'; el.id='huecos';
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
@@ -1889,7 +2013,11 @@ function vInsights(m){
   store.profile.style_dna=dna;
   store.profile.drobe_score=computeDrobeScore();
   save();
-  if(session) cloud.updateProfile({style_dna:dna,drobe_score:store.profile.drobe_score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(()=>{});
+  if(session){
+    if(store.profile.consent_data_b2b){
+      cloud.updateProfile({style_dna:dna,drobe_score:store.profile.drobe_score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(()=>{});
+    }
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -1926,6 +2054,7 @@ function vPerfil(m){
       <span class="ring" style="background:var(--noir);color:#E8C9A8">${svg('chart',22)}</span>
       <div><div class="t1">Drobe for Brands</div><div class="t2">Demo de la vista para marcas · datos reales agregados</div></div>
       <span class="arr">${svg('chev',20)}</span></button>
+    <div id="strava_slot"></div>
 
     <button class="opt" id="p_wish" style="margin-bottom:12px">
       <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('heart',22)}</span>
@@ -1939,21 +2068,21 @@ function vPerfil(m){
         <label class="toggle-row">
           <div>
             <div class="tr-title">Mejorar Drobe con mis datos</div>
-            <div class="tr-sub">Tus datos anónimos ayudan a mejorar las recomendaciones para todos los usuarios.</div>
+            <div class="tr-sub">Envía eventos de uso anónimos (escaneos, compras) que afinan las recomendaciones. Si lo apagas, no se envía ninguno.</div>
           </div>
           <input type="checkbox" id="c_analytics" class="toggle" ${p.consent_analytics?'checked':''}/>
         </label>
         <label class="toggle-row">
           <div>
             <div class="tr-title">Compartir datos anónimos con marcas</div>
-            <div class="tr-sub">Nunca con tu nombre. Solo señales de comportamiento agregadas que ayudan a las marcas a entender cómo se usa su ropa. Sube tu Drobe Score.</div>
+            <div class="tr-sub">Nunca con tu nombre: solo agregados (segmento, valor, marcas). Si lo apagas, se retiran de la nube al momento.</div>
           </div>
           <input type="checkbox" id="c_b2b" class="toggle" ${p.consent_data_b2b?'checked':''}/>
         </label>
         <label class="toggle-row">
           <div>
             <div class="tr-title">Recibir recomendaciones personalizadas</div>
-            <div class="tr-sub">Ofertas y novedades de marcas que encajan con tu estilo real.</div>
+            <div class="tr-sub">Activa «Seleccionado para ti» en el Estilista: productos reales según tus marcas y tu gasto. Nadie paga por aparecer.</div>
           </div>
           <input type="checkbox" id="c_marketing" class="toggle" ${p.consent_marketing?'checked':''}/>
         </label>
@@ -1977,6 +2106,15 @@ function vPerfil(m){
   m.querySelector('#p_maletas')?.addEventListener('click',()=>openMaletasGuardadas());
   m.querySelector('#p_tour')?.addEventListener('click',()=>{ try{localStorage.removeItem('drobe.tour');}catch(e){} startTour(); });
   m.querySelector('#p_b2b')?.addEventListener('click',()=>openB2BDemo());
+  stravaConfig().then(cfg=>{
+    const slot=m.querySelector('#strava_slot'); if(!slot||!cfg.configured)return;
+    const st=store.profile?.strava;
+    slot.innerHTML=`<button class="opt" id="p_strava" style="margin-bottom:12px">
+      <span class="ring" style="background:#FC4C02;color:#fff">${svg('sync',22)}</span>
+      <div><div class="t1">${st?'Strava conectado':'Conectar Strava'}</div><div class="t2">${st?'Sincroniza los km reales de tus zapatillas':'Km reales de zapatillas y bicis, automáticos'}</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>`;
+    slot.querySelector('#p_strava').onclick=()=>st?stravaSyncGear():stravaConnect(cfg);
+  });
   m.querySelector('#p_wish')?.addEventListener('click',()=>openWishlist());
 
   // medidas
@@ -1989,8 +2127,14 @@ function vPerfil(m){
   const saveConsents=()=>{
     store.profile=store.profile||{};
     store.profile.consent_analytics=m.querySelector('#c_analytics')?.checked||false;
+    const wasB2b=store.profile.consent_data_b2b;
     store.profile.consent_data_b2b=m.querySelector('#c_b2b')?.checked||false;
     store.profile.consent_marketing=m.querySelector('#c_marketing')?.checked||false;
+    // revocación real: al apagar el toggle de marcas, los agregados se BORRAN de la nube
+    if(session&&wasB2b&&!store.profile.consent_data_b2b){
+      cloud.updateProfile({style_dna:null,drobe_score:null,segment:null,avg_price_per_item:null,total_wardrobe_value:null,brand_sizes:null,garment_count:null}).catch(()=>{});
+      toast('Datos agregados retirados de la nube.');
+    }
     store.profile.consent_at=new Date().toISOString();
     save();
     if(session) cloud.updateProfile({consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:store.profile.consent_analytics,consent_marketing:store.profile.consent_marketing,consent_at:store.profile.consent_at}).catch(()=>{});
@@ -2604,12 +2748,84 @@ function toast(txt){
   document.body.appendChild(el); setTimeout(()=>el.remove(),3500);
 }
 
+/* ═══ STRAVA: km reales de zapatillas y bicis ═══ */
+async function stravaConfig(){
+  if(window._stravaCfg!==undefined)return window._stravaCfg;
+  try{ const r=await fetch('/api/strava'); window._stravaCfg=await r.json(); }
+  catch(e){ window._stravaCfg={configured:false}; }
+  return window._stravaCfg;
+}
+function stravaConnect(cfg){
+  try{localStorage.setItem('drobe.strava_pending','1');}catch(e){}
+  const redirect=encodeURIComponent(location.origin+location.pathname);
+  location.href=`https://www.strava.com/oauth/authorize?client_id=${cfg.client_id}&redirect_uri=${redirect}&response_type=code&scope=read&approval_prompt=auto`;
+}
+async function stravaHandleReturn(){
+  const code=new URLSearchParams(location.search).get('code');
+  let pending=false; try{pending=localStorage.getItem('drobe.strava_pending')==='1';}catch(e){}
+  if(!code||!pending)return;
+  try{localStorage.removeItem('drobe.strava_pending');}catch(e){}
+  history.replaceState(null,'',location.pathname);
+  const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'token',code})}).then(x=>x.json()).catch(()=>null);
+  if(r&&r.ok){
+    store.profile=store.profile||{};
+    store.profile.strava={access_token:r.access_token,refresh_token:r.refresh_token,expires_at:r.expires_at,name:r.athlete?.firstname||''};
+    save(); toast('Strava conectado'+(r.athlete?.firstname?', '+r.athlete.firstname:'')); render();
+  } else toast('No se pudo conectar Strava: '+((r&&r.reason)||'error'));
+}
+async function stravaToken(){
+  const st=store.profile?.strava; if(!st)return null;
+  if(st.expires_at&&st.expires_at*1000>Date.now()+60000)return st.access_token;
+  const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'refresh',refresh_token:st.refresh_token})}).then(x=>x.json()).catch(()=>null);
+  if(r&&r.ok){ Object.assign(st,{access_token:r.access_token,refresh_token:r.refresh_token,expires_at:r.expires_at}); save(); return r.access_token; }
+  return null;
+}
+async function stravaSyncGear(){
+  const tok=await stravaToken();
+  if(!tok){ toast('Reconecta Strava'); delete store.profile.strava; save(); render(); return; }
+  const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'gear',access_token:tok})}).then(x=>x.json()).catch(()=>null);
+  if(!r||!r.ok){ toast('No se pudo leer tu material de Strava'); return; }
+  // actualizar automáticamente prendas ya vinculadas
+  const all=[...(r.shoes||[]),...(r.bikes||[])];
+  let updated=0;
+  store.garments.forEach(g=>{ const m=all.find(x=>x.id===g.stravaGear); if(m&&g.km!==m.km){ g.km=m.km; updated++; if(session)cloud.pushGarment(g); } });
+  if(updated)save();
+  openStravaGear(r,updated);
+}
+function openStravaGear(r,updated){
+  const el=document.createElement('div'); el.className='ficha'; el.id='stravagear';
+  const shoes=r.shoes||[];
+  const cands=store.garments.filter(g=>g.context==='deporte'||/(zapatilla|sneaker|running)/i.test(g.cat+' '+g.name));
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="sgb">${svg('back',20)}</button><span class="t">Material de Strava</span></div>
+    ${updated?`<div class="note" style="margin-bottom:12px">${svg('check',16)}<span>${updated} prenda(s) actualizadas con km reales.</span></div>`:''}
+    ${shoes.length?'':`<div class="soc-empty">No hay zapatillas registradas en tu Strava.</div>`}
+    ${shoes.map(sh=>{
+      const linked=store.garments.find(g=>g.stravaGear===sh.id);
+      return `<div class="tk-card"><div class="tk-body">
+        <div class="tk-store">${esc(sh.name)}</div>
+        <div class="tk-meta">${sh.km} km reales${sh.km>=600?' · <b style="color:var(--accent)">zona de renovación</b>':''}</div>
+        ${linked?`<div class="tk-badge ok">${svg('check',12)} Vinculada a ${esc(linked.brand)} ${esc(linked.name)}</div>`
+        :cands.length?`<select class="sg-sel" data-gear="${esc(sh.id)}" data-km="${sh.km}"><option value="">Vincular a una prenda…</option>${cands.map(g=>`<option value="${g.id}">${esc(g.brand)} ${esc(g.name)}</option>`).join('')}</select>`
+        :`<div class="tk-badge off">Añade tus zapatillas al armario para vincularlas</div>`}
+      </div></div>`;}).join('')}
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#sgb').onclick=()=>el.remove();
+  el.querySelectorAll('.sg-sel').forEach(s=>s.onchange=()=>{
+    const g=findG(s.value); if(!g)return;
+    g.stravaGear=s.dataset.gear; g.km=Number(s.dataset.km); g.context='deporte'; g.sport=g.sport||'Run';
+    save(); if(session)cloud.pushGarment(g); haptic(); el.remove(); stravaSyncGear();
+  });
+}
+
 /* ═══════════════════════════════════════════
    CLOUD + ARRANQUE
 ═══════════════════════════════════════════ */
 render();
 initCloud();
 loadWeather();
+stravaHandleReturn();
 if(needsWelcome())setTimeout(()=>renderWelcome('intro'),300);
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 
