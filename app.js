@@ -313,7 +313,7 @@ function readForm(scope){
 /* ═══════════════════════════════════════════
    IA — RECONOCIMIENTO
 ═══════════════════════════════════════════ */
-async function imageToBase64(file,maxDim=1024){
+async function imageToBase64(file,maxDim=1152,quality=0.85){
   if(!file) throw new Error('No hay archivo.');
   if(!/^image\//.test(file.type) && !/\.(jpe?g|png|heic|heif|webp)$/i.test(file.name||'')){
     throw new Error('El archivo no es una imagen ('+(file.type||'desconocido')+').');
@@ -324,7 +324,7 @@ async function imageToBase64(file,maxDim=1024){
       let bitmap;
       try{ bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}); }
       catch(_){ bitmap=await createImageBitmap(file); }
-      const out=bitmapToData(bitmap,maxDim);
+      const out=bitmapToData(bitmap,maxDim,quality);
       bitmap.close&&bitmap.close();
       if(out) return out;
     }catch(e){ /* sigue al fallback */ }
@@ -338,7 +338,7 @@ async function imageToBase64(file,maxDim=1024){
       const im=new Image();
       im.onload=()=>{
         clearTimeout(to);
-        try{ const out=bitmapToData(im,maxDim); out?res(out):rej(new Error('No se pudo convertir la imagen.')); }
+        try{ const out=bitmapToData(im,maxDim,quality); out?res(out):rej(new Error('No se pudo convertir la imagen.')); }
         catch(err){ rej(err); }
       };
       im.onerror=()=>{ clearTimeout(to); rej(new Error('Formato de imagen no compatible. Prueba con JPG o PNG.')); };
@@ -347,7 +347,7 @@ async function imageToBase64(file,maxDim=1024){
     fr.readAsDataURL(file);
   });
 }
-function bitmapToData(src,maxDim){
+function bitmapToData(src,maxDim,quality=0.85){
   const sw=src.width||src.naturalWidth, sh=src.height||src.naturalHeight;
   if(!sw||!sh) return null;
   const sc=Math.min(1,maxDim/Math.max(sw,sh));
@@ -356,7 +356,7 @@ function bitmapToData(src,maxDim){
   const ctx=c.getContext('2d'); if(!ctx) return null;
   ctx.drawImage(src,0,0,w,h);
   let dataUrl;
-  try{ dataUrl=c.toDataURL('image/jpeg',0.82); }catch(e){ return null; }
+  try{ dataUrl=c.toDataURL('image/jpeg',quality); }catch(e){ return null; }
   if(!dataUrl||dataUrl.length<100) return null;
   return {media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h};
 }
@@ -373,22 +373,27 @@ async function callAI(system,user,image=null){
     return JSON.parse(text);
   }catch(e){ return null; }
 }
-const VISION_SYSTEM=`Eres un experto en moda y catalogador profesional de prendas.
+const VISION_SYSTEM=`Eres un experto en moda y catalogador profesional de prendas de una casa de lujo.
 REGLAS CRÍTICAS:
 1. Nunca inventes. Si no puedes determinarlo con seguridad, baja la confianza.
 2. Para 'cat' usa EXACTAMENTE uno de: ${CATS_DETAIL.join(', ')}.
-3. Una chaqueta NUNCA es una camiseta. Un zapato NUNCA es un pantalón.
-4. Para 'brand': detecta logotipos, bordados, etiquetas visibles. Si no ves marca, devuelve "" con confianza 0.
-5. Confianza 0.0–1.0. Menos de 0.75 = campo incierto.
-6. Responde SOLO JSON válido.
+3. Distingue con rigor: camisa (botones) ≠ camiseta (sin botones); pantalón (largo) ≠ short; jersey (punto) ≠ sudadera (felpa); bomber ≠ blazer ≠ abrigo. Un zapato NUNCA es un pantalón.
+4. 'name': nombre corto y editorial EN ESPAÑOL que un catálogo usaría (ej. "Camisa de lino crudo", "Vaquero recto lavado medio"). Sin marca dentro del nombre.
+5. 'brand': solo si ves logotipo, bordado o etiqueta legible. Si no, "" con confianza 0.
+6. 'color' y 'colors' EN ESPAÑOL (Blanco, Crudo, Negro, Gris, Marino, Azul, Verde, Beige, Marrón, Mostaza, Rojo…). 'material' en español si es identificable por textura (Algodón, Lino, Lana, Denim, Piel, Poliéster…), si no "".
+7. Confianza 0.0–1.0 por campo. Menos de 0.75 = campo incierto.
+8. Responde SOLO JSON válido.
 {"detected":true,"garment_count":1,"cat":"","brand":"","name":"","fit":"","color":"","colors":[],"material":"","season":"","formality":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0}}`;
 
-const TICKET_SYSTEM=`Eres un sistema OCR especializado en tickets de tiendas de moda.
+const TICKET_SYSTEM=`Eres un sistema OCR de precisión especializado en tickets de tiendas de moda.
 REGLAS:
-- No inventes. Si un dato no se ve claramente, baja la confianza (0-1) y deja el campo vacío.
-- "cat" DEBE estar en español y ser uno de: ${CATS_DETAIL.join(', ')}. Traduce del inglés si hace falta: T-SHIRT→Camiseta manga corta, PANTS/TROUSERS→Pantalón vestir, LINEN TROUSERS→Pantalón lino, JEANS→Vaquero, CHINO→Chino, SHIRT→Camisa Oxford, SWEATER/KNIT→Jersey, HOODIE→Hoodie, JACKET→Bomber, COAT→Abrigo, SHOES/SNEAKERS→Sneakers, SHORTS→Shorts. Fíjate bien en la descripción para no confundir camiseta con camisa, ni pantalón con short.
-- "dateISO" en formato AAAA-MM-DD si puedes deducirla del ticket.
+- No inventes. Si un dato no se lee con claridad, baja la confianza (0-1) y deja el campo vacío.
+- SOLO prendas y calzado: ignora líneas de bolsas, arreglos, envío, impuestos, redondeos o tarjetas regalo.
+- "cat" DEBE estar en español y ser uno de: ${CATS_DETAIL.join(', ')}. Traduce del inglés si hace falta: T-SHIRT→Camiseta manga corta, PANTS/TROUSERS→Pantalón vestir, LINEN TROUSERS→Pantalón lino, JEANS→Vaquero, CHINO→Chino, SHIRT→Camisa Oxford, SWEATER/KNIT→Jersey, HOODIE→Hoodie, JACKET→Bomber, COAT→Abrigo, SHOES/SNEAKERS→Sneakers, SHORTS→Shorts. Fíjate en la descripción completa para no confundir camiseta con camisa, ni pantalón con short.
+- "name": descripción de la línea del ticket limpia y legible en español.
+- "dateISO" en formato AAAA-MM-DD si puedes deducirla (los tickets españoles suelen usar DD/MM/AAAA).
 - "sku" es el número de referencia/artículo si aparece.
+- "price": precio final de la línea (con descuento aplicado si lo hay).
 Responde SOLO JSON: {"store":"","date":"","dateISO":"","total":0,"items":[{"name":"","brand":"","sku":"","price":0,"cat":"","confidence":0}]}`;
 
 /* ═══════════════════════════════════════════
@@ -642,7 +647,7 @@ function handleScan(m,e,kind){
     <div class="empty" style="padding-top:80px">${svg('load',30)}<div style="margin-top:14px">Preparando imagen…</div>
     <div style="margin-top:6px;font-size:11px;color:var(--ink3)">${f.type||'tipo?'} · ${sizeMB} MB</div></div>`;
   m.querySelector('#b0').onclick=()=>{addMode='choose';vAdd(m);};
-  imageToBase64(f)
+  imageToBase64(f, kind==='ticket'?1800:1152, kind==='ticket'?0.92:0.85)
     .then(img=>runPipeline(m,img,kind))
     .catch(err=>{
       m.innerHTML=`
@@ -658,35 +663,65 @@ function handleScan(m,e,kind){
 
 async function runPipeline(m,img,kind){
   const steps=kind==='ticket'
-    ?['Procesando imagen…','Corrigiendo perspectiva…','Leyendo ticket…','Extrayendo prendas…']
-    :['Detectando prenda…','Clasificando tipo exacto…','Identificando marca y corte…','Calculando confianza…'];
+    ?['Procesando imagen','Corrigiendo perspectiva','Leyendo línea a línea','Extrayendo prendas y precios']
+    :['Analizando la prenda','Identificando tipo y corte','Buscando marca y tejido','Afinando el resultado'];
   m.innerHTML=`
     <div class="backbar"><button id="b" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Leyendo ticket':'Reconociendo prenda'}</span></div>
     <div id="stage">
-      <div class="skel preview"><img src="${img.dataUrl}"/><div class="shimmer"></div></div>
-      <div class="pipe-steps" id="psteps">${steps.map((s,i)=>`<div class="pstep" id="ps${i}">${svg('load',14)} ${s}</div>`).join('')}</div>
+      <div class="scanwrap">
+        <img src="${img.dataUrl}" alt=""/>
+        <div class="scan-veil"></div>
+        <div class="scan-line"></div>
+        <div class="scan-reveal" id="scanreveal"></div>
+      </div>
+      <div class="pipe-steps" id="psteps">${steps.map((s,i)=>`<div class="pstep" id="ps${i}"><span class="pdot"></span>${s}</div>`).join('')}</div>
     </div>`;
   m.querySelector('#b').onclick=()=>{addMode='choose';vAdd(m);};
-  let si=0; const iv=setInterval(()=>{ const el=m.querySelector(`#ps${si}`); if(el)el.classList.add('done'); si++; },600);
-  const result=await callAI(kind==='ticket'?TICKET_SYSTEM:VISION_SYSTEM,kind==='ticket'?'Extrae todas las prendas de este ticket de compra.':'Analiza esta prenda con máxima precisión.',img);
-  clearInterval(iv); steps.forEach((_,i)=>{ const el=m.querySelector(`#ps${i}`); if(el)el.classList.add('done'); });
-  await new Promise(r=>setTimeout(r,300));
+
+  // pasos con ritmo orgánico (rápido al inicio, se detiene en el último hasta que la IA responde)
+  const stepDelays=[500,900,1500];
+  stepDelays.forEach((d,i)=>setTimeout(()=>{ const el=m.querySelector(`#ps${i}`); if(el)el.classList.add('done'); },d));
+
+  // llamada a la IA con un reintento automático si falla
+  const usr=kind==='ticket'?'Extrae todas las prendas de este ticket de compra.':'Analiza esta prenda con máxima precisión.';
+  const sys=kind==='ticket'?TICKET_SYSTEM:VISION_SYSTEM;
+  let result=await callAI(sys,usr,img);
+  if(!result) result=await callAI(sys,usr,img);
+
+  steps.forEach((_,i)=>{ const el=m.querySelector(`#ps${i}`); if(el)el.classList.add('done'); });
+
+  // si el usuario pulsó atrás durante el análisis, no sobrescribir su pantalla
+  if(!m.querySelector('#stage')) return;
+
+  // momento de revelación editorial sobre la foto
+  const rev=m.querySelector('#scanreveal');
+  const wrap=m.querySelector('.scanwrap');
+  if(rev&&result){
+    haptic(14);
+    if(kind==='ticket'&&result.items?.length){
+      rev.innerHTML=`<div class="sr-k">${esc(result.store||'Ticket leído')}</div><div class="sr-n">${result.items.length} prenda${result.items.length>1?'s':''} encontrada${result.items.length>1?'s':''}</div>`;
+    } else if(kind!=='ticket'&&result.detected){
+      rev.innerHTML=`<div class="sr-k">${esc(result.brand||'Identificada')}</div><div class="sr-n">${esc(result.name||result.cat||'Prenda')}</div>`;
+    }
+    if(rev.innerHTML){ wrap.classList.add('found'); await new Promise(r=>setTimeout(r,1300)); }
+  }
   if(kind==='ticket') showTicket(m,result,img);
   else showPrenda(m,result,img);
 }
 
 function showPrenda(m,r,img){
   const failed=!r||!r.detected;
+  if(r&&r.cat)r.cat=normalizeCat(r.cat);
   const c=r?.confidence||{};
   const hasLow=Object.values(c).some(v=>v<0.75);
   const stage=m?.querySelector?.('#stage')||m;
   stage.innerHTML=`
-    ${failed?`<div class="note warn" style="margin-bottom:14px">${svg('spark',18)}<span>No pude analizar automáticamente. Revisa GROQ_API_KEY en Vercel. Rellena manualmente — nunca invento.</span></div>`
-    :hasLow?`<div class="note warn" style="margin-bottom:14px">${svg('spark',18)}<span>Datos con confianza baja marcados en naranja. Revisa antes de guardar.</span></div>`
-    :`<div class="note" style="margin-bottom:14px">${svg('check',18)}<span>Prenda catalogada con alta confianza. Edita lo que necesites.</span></div>`}
-    ${img?`<div class="scanimg"><img src="${img.dataUrl}"/></div>`:''}
-    ${garmentFormHTML(r||{},c)}
-    <button class="btn dark" id="conf" style="margin-top:6px">${svg('add',18,2)} Añadir al armario</button>`;
+    ${failed?`<div class="note warn reveal" style="margin-bottom:14px">${svg('spark',18)}<span>No pude analizarla automáticamente esta vez. Rellena los datos — nunca invento.</span></div>`
+    :hasLow?`<div class="note warn reveal" style="margin-bottom:14px">${svg('spark',18)}<span>Los campos en naranja tienen confianza baja. Revísalos antes de guardar.</span></div>`
+    :`<div class="note reveal" style="margin-bottom:14px">${svg('check',18)}<span>Catalogada con alta confianza. Edita lo que necesites.</span></div>`}
+    ${img?`<div class="scanimg reveal" style="animation-delay:.05s"><img src="${img.dataUrl}"/></div>`:''}
+    <div class="reveal" style="animation-delay:.1s">${garmentFormHTML(r||{},c)}</div>
+    <button class="btn dark reveal" id="conf" style="margin-top:6px;animation-delay:.18s">${svg('add',18,2)} Añadir al armario</button>`;
   stage.querySelector('#conf').onclick=()=>{
     const d=readForm(stage);
     addGarment({...d,catGroup:catToGroup(d.cat),bought:'Hoy',worn:0,lastWorn:'—',status:'uso',img:img?.dataUrl||'./assets/silbon-raquetas-white.png',photos:[],docs:[],tags:[]});
