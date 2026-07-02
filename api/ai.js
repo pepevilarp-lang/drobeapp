@@ -44,7 +44,10 @@ module.exports = async function handler(req, res) {
   console.log('[ai] model:', model, 'hasImage:', hasImage);
 
   try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20000);
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      signal: ctrl.signal,
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -58,6 +61,7 @@ module.exports = async function handler(req, res) {
       })
     });
 
+    clearTimeout(timer);
     const data = await response.json();
     console.log('[ai] status:', response.status, 'error:', data && data.error ? data.error.message : 'none');
 
