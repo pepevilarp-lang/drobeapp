@@ -400,7 +400,7 @@ Responde SOLO JSON: {"store":"","date":"","dateISO":"","total":0,"items":[{"name
    ROUTER
 ═══════════════════════════════════════════ */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', fichaId=null, addMode='choose';
+let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', wardQuery='', fichaId=null, addMode='choose';
 const app=document.getElementById('app');
 const TABS=[
   {k:'armario',i:'shirt',l:'Armario'},
@@ -465,13 +465,32 @@ function vArmario(m){
     });
   } else {
     const cats=['Todo','En venta',...new Set(store.garments.map(g=>g.catGroup||g.cat))];
-    const list=store.garments.filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':(g.catGroup||g.cat)===gridFilter);
-    ward.innerHTML=`<div class="chips" style="margin-top:14px">${cats.map(c=>`<button class="chip ${gridFilter===c?'on':''}" data-f="${c}">${c}</button>`).join('')}</div>
-      <div class="grid">${list.map((g,i)=>`<div class="gcard reveal" data-g="${g.id}" style="animation-delay:${i*0.04}s">
+    const norm=s=>(s||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const matchQ=g=>{
+      if(!wardQuery)return true;
+      const q=norm(wardQuery);
+      return [g.brand,g.name,g.cat,g.catGroup,g.color,(g.colors||[]).join(' '),g.material,g.size,g.store].some(v=>norm(v).includes(q));
+    };
+    const filterList=()=>store.garments
+      .filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':(g.catGroup||g.cat)===gridFilter)
+      .filter(matchQ);
+    const gridHTML=list=>list.length
+      ?list.map((g,i)=>`<div class="gcard reveal" data-g="${g.id}" style="animation-delay:${Math.min(i,10)*0.04}s">
         <div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}</div>
-        <div class="cap"><div class="b">${g.brand}</div><div class="n">${g.name}</div><div class="m">${g.cat} · ${g.color}</div></div></div>`).join('')}</div>`;
+        <div class="cap"><div class="b">${g.brand}</div><div class="n">${g.name}</div><div class="m">${g.cat} · ${g.color}</div></div></div>`).join('')
+      :`<div class="ward-empty">${svg('search',22)}<div>Nada que encaje con «${esc(wardQuery)}»${gridFilter!=='Todo'?` en ${esc(gridFilter)}`:''}.</div></div>`;
+    ward.innerHTML=`
+      <div class="ward-search"><span class="ws-ico">${svg('search',17)}</span><input id="wq" placeholder="Marca, color, tipo, talla…" value="${esc(wardQuery)}" autocapitalize="off" autocorrect="off"/>${wardQuery?`<button class="ws-clear" id="wqc" aria-label="Limpiar">✕</button>`:''}</div>
+      <div class="chips" style="margin-top:12px">${cats.map(c=>`<button class="chip ${gridFilter===c?'on':''}" data-f="${c}">${c}</button>`).join('')}</div>
+      <div class="grid" id="wgrid">${gridHTML(filterList())}</div>`;
+    const grid=ward.querySelector('#wgrid');
+    const bindCards=()=>grid.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>openFicha(b.dataset.g));
+    bindCards();
     ward.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{gridFilter=b.dataset.f;vArmario(m);});
-    ward.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>openFicha(b.dataset.g));
+    const wq=ward.querySelector('#wq');
+    wq.oninput=()=>{ wardQuery=wq.value.trim(); grid.innerHTML=gridHTML(filterList()); bindCards();
+      const c=ward.querySelector('#wqc'); if(wardQuery&&!c){const btn=document.createElement('button');btn.className='ws-clear';btn.id='wqc';btn.setAttribute('aria-label','Limpiar');btn.textContent='✕';btn.onclick=()=>{wardQuery='';vArmario(m);};ward.querySelector('.ward-search').appendChild(btn);} else if(!wardQuery&&c)c.remove(); };
+    const wqc=ward.querySelector('#wqc'); if(wqc)wqc.onclick=()=>{wardQuery='';vArmario(m);};
   }
 }
 
@@ -1673,6 +1692,11 @@ function vPerfil(m){
       <div><div class="t1">Ver tutorial</div><div class="t2">Un repaso rápido de cómo funciona Drobe</div></div>
       <span class="arr">${svg('chev',20)}</span></button>
 
+    <button class="opt" id="p_b2b" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--noir);color:#E8C9A8">${svg('chart',22)}</span>
+      <div><div class="t1">Drobe for Brands</div><div class="t2">Demo de la vista para marcas · datos reales agregados</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
     <!-- Consentimiento B2B — CRÍTICO para el negocio -->
     <div class="consent-card reveal" style="animation-delay:.04s">
       <div class="cc-head">${svg('dna',18)} Datos y privacidad</div>
@@ -1717,6 +1741,7 @@ function vPerfil(m){
   m.querySelector('#p_tickets')?.addEventListener('click',()=>openTickets());
   m.querySelector('#p_maletas')?.addEventListener('click',()=>openMaletasGuardadas());
   m.querySelector('#p_tour')?.addEventListener('click',()=>{ try{localStorage.removeItem('drobe.tour');}catch(e){} startTour(); });
+  m.querySelector('#p_b2b')?.addEventListener('click',()=>openB2BDemo());
 
   // medidas
   ['altura','peso','pecho','cintura','pie'].forEach(k=>{
@@ -1999,6 +2024,65 @@ function showTourStep(){
   } else {
     setTimeout(proceed,80);
   }
+}
+
+/* ═══════════════════════════════════════════
+   B2B DEMO — la vista que verían las marcas.
+   Datos agregados REALES del armario del usuario; nunca inventados.
+═══════════════════════════════════════════ */
+function brandStats(brand){
+  const gs=store.garments.filter(g=>(g.brand||'').toLowerCase()===brand.toLowerCase());
+  if(!gs.length)return null;
+  const n=gs.length;
+  const avgPrice=gs.reduce((s,g)=>s+(+g.price||0),0)/n;
+  const avgCpw=gs.reduce((s,g)=>s+cpw(g),0)/n;
+  const dead=gs.filter(g=>(g.worn||0)<=3).length;
+  const colors={}; gs.forEach(g=>(g.colors||[g.color]).filter(Boolean).forEach(c=>colors[c]=(colors[c]||0)+1));
+  const cats={}; gs.forEach(g=>{const k=g.catGroup||g.cat||'—';cats[k]=(cats[k]||0)+1;});
+  const sizes={}; gs.forEach(g=>{if(g.size)sizes[g.size]=(sizes[g.size]||0)+1;});
+  const top=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  return {n,avgPrice,avgCpw,deadPct:Math.round(dead/n*100),
+    topColors:top(colors),topCats:top(cats),topSizes:top(sizes)};
+}
+function openB2BDemo(){
+  const brands=[...new Set(store.garments.map(g=>g.brand).filter(b=>b&&b!=='—'))];
+  if(!brands.length){ toast('Añade prendas con marca para ver la demo B2B'); return; }
+  let sel=brands[0];
+  const el=document.createElement('div'); el.className='ficha b2b'; el.id='b2bdemo';
+  const paint=()=>{
+    const s=brandStats(sel);
+    el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+      <div class="backbar b2b-bar"><button id="bb">${svg('back',20)}</button><span class="t">Drobe for Brands</span></div>
+      <div class="b2b-head">
+        <div class="b2b-eyebrow">Vista de marca · demo</div>
+        <div class="b2b-title">Lo que ${esc(sel)}<br>vería de sus clientes</div>
+      </div>
+      <div class="chips b2b-chips">${brands.map(b=>`<button class="chip ${b===sel?'on':''}" data-b="${esc(b)}">${esc(b)}</button>`).join('')}</div>
+      ${s?`
+      <div class="b2b-grid">
+        <div class="b2b-card"><div class="bn">${s.n}</div><div class="bl">Prendas en armarios</div></div>
+        <div class="b2b-card"><div class="bn">${s.avgPrice.toFixed(0)}€</div><div class="bl">Ticket medio</div></div>
+        <div class="b2b-card"><div class="bn">${s.avgCpw.toFixed(2)}€</div><div class="bl">Coste por uso</div></div>
+        <div class="b2b-card ${s.deadPct>=40?'warn':''}"><div class="bn">${s.deadPct}%</div><div class="bl">Prendas dormidas</div></div>
+      </div>
+      <div class="b2b-sec">Señal de comportamiento</div>
+      <div class="b2b-signal">${s.deadPct>0
+        ?`El <b>${s.deadPct}%</b> de las prendas ${esc(sel)} en armarios tienen 3 usos o menos. ${s.deadPct>=40?'Riesgo de percepción de bajo valor por uso.':'Uso saludable del producto.'}`
+        :`Todas las prendas ${esc(sel)} registradas están en uso activo.`}</div>
+      ${s.topSizes.length?`<div class="b2b-sec">Tallas reales compradas</div>
+      <div class="b2b-rows">${s.topSizes.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
+      ${s.topColors.length?`<div class="b2b-sec">Colores en armario</div>
+      <div class="b2b-rows">${s.topColors.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
+      ${s.topCats.length?`<div class="b2b-sec">Categorías</div>
+      <div class="b2b-rows">${s.topCats.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
+      `:''}
+      <div class="b2b-foot">${svg('lock',14)} Demo con los datos agregados de tu propio armario. En producción: agregados anónimos de miles de usuarios, solo con consentimiento explícito.</div>
+    </div>`;
+    el.querySelector('#bb').onclick=()=>el.remove();
+    el.querySelectorAll('[data-b]').forEach(b=>b.onclick=()=>{sel=b.dataset.b;paint();});
+  };
+  paint();
+  document.body.appendChild(el);
 }
 
 /* ═══════════════════════════════════════════
