@@ -141,10 +141,6 @@ main{flex:1;padding:0 22px 120px}
 .opt .t1{font-weight:650;font-size:16px;letter-spacing:-.01em}
 .opt .t2{font-size:13px;color:var(--ink2);margin-top:2px}
 .opt .arr{margin-left:auto;color:var(--ink3)}
-.skel{border-radius:var(--r-m);overflow:hidden;background:var(--surface-2);aspect-ratio:4/5;position:relative}
-.skel.preview img{width:100%;height:100%;object-fit:cover;object-position:center top;opacity:.85}
-.shimmer{position:absolute;inset:0;background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.7) 50%,transparent 80%);animation:sh 1.3s infinite}
-@keyframes sh{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .conf{display:flex;align-items:center;gap:12px;padding:13px 14px;background:var(--surface);border:1px solid var(--hair);border-radius:12px;margin-bottom:8px;opacity:0;transform:translateY(8px);animation:reveal .5s var(--ease) forwards}
 .conf.low{border-color:#F0D9C0;background:#FCF6EF}
 .conf .k{font-size:12px;color:var(--ink3);font-weight:600;width:92px;flex:none}
@@ -531,3 +527,24 @@ input::placeholder{color:var(--ink3);opacity:.75}
 /* Scroll horizontal con snap suave en carruseles */
 .compat,.maleta-thumbs{scroll-snap-type:x proximity}
 .compat .it,.maleta-thumbs .mt{scroll-snap-align:start}
+
+/* ═══ ESCÁNER CINEMATOGRÁFICO ═══ */
+.scanwrap{position:relative;width:100%;aspect-ratio:4/5;border-radius:var(--r-l);overflow:hidden;background:var(--noir);box-shadow:var(--s3)}
+.scanwrap img{width:100%;height:100%;object-fit:cover;object-position:center top}
+.scan-veil{position:absolute;inset:0;background:rgba(19,17,15,.28);transition:background .8s var(--ease)}
+.scan-line{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#F6E7DC 20%,#FFD9BD 50%,#F6E7DC 80%,transparent);
+  box-shadow:0 0 24px 6px rgba(255,180,130,.55),0 0 60px 18px rgba(255,160,100,.22);
+  animation:scanSweep 2.1s cubic-bezier(.45,0,.55,1) infinite}
+@keyframes scanSweep{0%{top:2%}50%{top:97%}100%{top:2%}}
+.scanwrap.found .scan-line{animation-play-state:paused;opacity:0;transition:opacity .5s}
+.scanwrap.found .scan-veil{background:linear-gradient(180deg,transparent 30%,rgba(19,17,15,.85))}
+.scan-reveal{position:absolute;left:22px;right:22px;bottom:18px;opacity:0;transform:translateY(14px);transition:all .7s var(--ease)}
+.scanwrap.found .scan-reveal{opacity:1;transform:none}
+.sr-k{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#E8C9A8}
+.sr-n{font-family:var(--serif);font-size:26px;font-weight:500;font-style:italic;line-height:1.15;color:#F6F1E9;margin-top:3px}
+
+/* pasos del pipeline con punto que se enciende */
+.pdot{width:7px;height:7px;border-radius:999px;background:var(--hair);flex:none;transition:all .4s var(--ease)}
+.pstep{display:flex;align-items:center;gap:11px;font-size:13.5px;color:var(--ink3);transition:color .4s var(--ease)}
+.pstep.done{color:var(--ink)}
+.pstep.done .pdot{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
