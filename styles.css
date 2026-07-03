@@ -688,3 +688,12 @@ input::placeholder{color:var(--ink3);opacity:.75}
 .msg-t{font-size:10.5px;color:var(--ink3);margin-top:3px;padding:0 4px}
 .msg.mine .msg-t{text-align:right}
 .faddph{top:calc(env(safe-area-inset-top) + 66px) !important}
+
+/* pregunta de contexto cuando la IA no lo detecta */
+.ctx-ask{background:var(--accent-soft);border-radius:var(--r-m);padding:16px;margin-bottom:14px}
+.ctx-ask-t{font-family:var(--serif);font-size:17px;font-style:italic;color:var(--accent);margin-bottom:12px}
+.ctx-ask-btns{display:flex;gap:10px}
+.ctx-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--paper);border:1.5px solid transparent;border-radius:12px;padding:13px;font-size:14.5px;font-weight:600;color:var(--ink);transition:all .2s var(--ease)}
+.ctx-btn.on{border-color:var(--accent);color:var(--accent)}
+.ctx-btn.on svg{stroke:var(--accent)}
+.ctx-btn:active{transform:scale(.97)}
