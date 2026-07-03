@@ -701,3 +701,14 @@ input::placeholder{color:var(--ink3);opacity:.75}
 /* fondo de estudio */
 .studio-btn{display:flex;align-items:center;justify-content:center;gap:7px;margin:0 auto 14px;background:var(--surface);border:1px solid var(--hair);border-radius:999px;padding:9px 16px;font-size:13px;font-weight:600;color:var(--ink2)}
 .studio-btn:disabled{opacity:.8}
+
+/* ═══ HOJAS INFERIORES DE AJUSTES ═══ */
+.sheet-ov{position:fixed;inset:0;z-index:500;background:rgba(19,17,15,.5);opacity:0;transition:opacity .3s var(--ease);display:flex;align-items:flex-end}
+.sheet-ov.show{opacity:1}
+.sheet{width:100%;max-width:var(--maxw);margin:0 auto;background:var(--paper);border-radius:24px 24px 0 0;padding:12px 22px calc(env(safe-area-inset-bottom) + 20px);transform:translateY(30px);transition:transform .35s var(--ease)}
+.sheet-ov.show .sheet{transform:none}
+.sheet-bar{width:38px;height:4px;border-radius:99px;background:var(--hair);margin:0 auto 16px}
+.sheet-t{font-family:var(--serif);font-size:22px;font-weight:500;font-style:italic;margin-bottom:14px}
+.sh-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--hair-2);font-size:14px}
+.sh-row span{color:var(--ink2)}
+.sh-row b{font-weight:600;text-align:right}
