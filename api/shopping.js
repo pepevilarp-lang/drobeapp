@@ -164,25 +164,56 @@ module.exports = async function handler(req, res) {
       (p.source||'').toLowerCase().includes(brandLC)
     );
 
+    /* ═══ FILTROS DE INTELIGENCIA DE USUARIO ═══
+       El corazón de Drobe es conocer al usuario: un hombre de 23 que viste
+       Stone Island NUNCA debe ver ropa de mujer, de bebé, ni Shein. */
+    const sexWord = /^h/i.test(sex) ? 'hombre' : /^m/i.test(sex) ? 'mujer' : '';
+    const KIDS_RX = /\b(beb[eé]s?|infantil(es)?|ni[ñn][oa]s?|kids?|junior|boys?|girls?|newborn|toddler)\b/i;
+    const WOMEN_RX = /\b(mujer(es)?|women|woman|femenin[ao]|se[ñn]ora|lad(y|ies)|chica)\b/i;
+    const MEN_RX = /\b(hombres?|men|man\b|masculin[oa]|caballeros?|chico)\b/i;
+    const sexOk = p => {
+      const t = (p.title||'');
+      if (KIDS_RX.test(t)) return false;                       // adultos siempre
+      if (sexWord === 'hombre' && WOMEN_RX.test(t) && !MEN_RX.test(t)) return false;
+      if (sexWord === 'mujer' && MEN_RX.test(t) && !WOMEN_RX.test(t)) return false;
+      return true;
+    };
+    // segunda mano NUNCA se cuela en el canal "nuevo"
+    const USED_RX = /vinted|wallapop|micolet|depop|milanuncios|vestiaire|segunda mano|seminuevo|usado|percentil|cash converters|vibbo|reciclad/i;
+    const channelOk = p => channel === 'used' ? true : !(USED_RX.test(p.source||'') || USED_RX.test(p.title||''));
+    // veto de segmento: quien compra Scalpers/Stone Island no compra Shein
+    const avgPrice = Number((body && body.avgPrice) || 0);
+    const JUNK_RX = /shein|temu|aliexpress|wish\b|banggood/i;                 // vetadas SIEMPRE
+    const LOW_RX = /primark|lefties|kiabi|pepco/i;                            // vetadas si el usuario gasta
+    const segmentOk = p => {
+      const s = (p.source||'') + ' ' + (p.title||'');
+      if (JUNK_RX.test(s)) return false;
+      if (avgPrice >= 35 && LOW_RX.test(s)) return false;
+      return true;
+    };
+    const smartOk = p => sexOk(p) && channelOk(p) && segmentOk(p);
+    // el sexo va en TODAS las queries, no solo en la genérica
+    const withSex = q => (sexWord && !/hombre|mujer|man|woman|men|women/i.test(q)) ? q + ' ' + sexWord : q;
+
     // BÚSQUEDA EXACTA: solo productos de LA MISMA marca
     let exact = [];
     if (brand) {
-      let raw = await serpSearch(exactQuery);
-      exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p));
+      let raw = await serpSearch(withSex(exactQuery));
+      exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p) && smartOk(p));
       // si la query con color no da, reintentar con marca + tipo
       if (!exact.length && simpleQuery !== exactQuery) {
-        raw = await serpSearch(simpleQuery);
-        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p));
+        raw = await serpSearch(withSex(simpleQuery));
+        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p) && smartOk(p));
       }
       // último intento: buscar solo la marca + primera palabra del tipo
       if (!exact.length && altQuery) {
-        raw = await serpSearch(brand + ' ' + altQuery.split(' ')[0]);
-        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p));
+        raw = await serpSearch(withSex(brand + ' ' + altQuery.split(' ')[0]));
+        exact = raw.map(mapItem).filter(p => p.title && matchesBrand(p) && validPrice(p) && matchesType(p) && smartOk(p));
       }
     } else {
       // sin marca: la query tal cual
-      const raw = await serpSearch(exactQuery);
-      exact = raw.map(mapItem).filter(p => p.title && validPrice(p) && matchesType(p));
+      const raw = await serpSearch(withSex(exactQuery));
+      exact = raw.map(mapItem).filter(p => p.title && validPrice(p) && matchesType(p) && smartOk(p));
     }
     exact.sort((a, b) => (a.price_value || 1e9) - (b.price_value || 1e9));
 
@@ -191,9 +222,7 @@ module.exports = async function handler(req, res) {
     if (altQuery) {
       let genericQuery = altQuery.replace(new RegExp(brand || '', 'gi'), '').trim() || altQuery;
       // añadir sexo si no está ya en la query, para afinar (hombre/mujer)
-      const sexWord = /^h/i.test(sex)?'hombre':/^m/i.test(sex)?'mujer':'';
-      if(sexWord && !/hombre|mujer|man|woman|men|women/i.test(genericQuery)) genericQuery += ' ' + sexWord;
-      genericQuery = genericQuery.trim();
+      genericQuery = withSex(genericQuery).trim();
 
       const isOwned = p => ownedBrands.some(b => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()));
       const seen = new Set();
@@ -206,7 +235,7 @@ module.exports = async function handler(req, res) {
         const bq = `${b} ${genericQuery}${usedSuffix}`.trim();
         const raw = await serpSearch(bq);
         raw.map(mapItem)
-          .filter(p => p.title && validPrice(p) && matchesType(p))
+          .filter(p => p.title && validPrice(p) && matchesType(p) && smartOk(p))
           .filter(p => (p.title||'').toLowerCase().includes(String(b).toLowerCase()) || (p.source||'').toLowerCase().includes(String(b).toLowerCase()))
           .forEach(p => { const k=(p.title||'')+p.price; if(!seen.has(k)){seen.add(k);collected.push(p);} });
       }
@@ -216,7 +245,7 @@ module.exports = async function handler(req, res) {
       if (collected.length < 4) {
         const altRaw = await serpSearch((genericQuery + usedSuffix).trim());
         altRaw.map(mapItem)
-          .filter(p => p.title && validPrice(p) && matchesType(p))
+          .filter(p => p.title && validPrice(p) && matchesType(p) && smartOk(p))
           .filter(p => !brandLC || !((p.title||'').toLowerCase().includes(brandLC) || (p.source||'').toLowerCase().includes(brandLC)))
           .filter(p => !maxPrice || !p.price_value || p.price_value < maxPrice)
           .forEach(p => { const k=(p.title||'')+p.price; if(!seen.has(k)){seen.add(k);collected.push(p);} });
