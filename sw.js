@@ -1,4 +1,4 @@
-const CACHE = 'drobe-v62';
+const CACHE = 'drobe-v63';
 const SHELL = [
   './','./index.html','./styles.css','./app.js','./wardrobe3d.js',
   './lib/supabase.js','./manifest.webmanifest',
