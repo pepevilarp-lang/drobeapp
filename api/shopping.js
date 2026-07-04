@@ -171,13 +171,24 @@ module.exports = async function handler(req, res) {
     const KIDS_RX = /\b(beb[eé]s?|infantil(es)?|ni[ñn][oa]s?|kids?|junior|boys?|girls?|newborn|toddler)\b/i;
     const WOMEN_RX = /\b(mujer(es)?|women|woman|femenin[ao]|se[ñn]ora|lad(y|ies)|chica)\b/i;
     const MEN_RX = /\b(hombres?|men|man\b|masculin[oa]|caballeros?|chico)\b/i;
+    // tipos de prenda que delatan el sexo aunque el título no diga "mujer"/"hombre"
+    const WOMEN_GARMENT_RX = /\b(vestidos?|faldas?|blusas?|bikinis?|sujetador(es)?|bralette|tangas?|camis[oó]n|tac[oó]n(es)?|bolsos? de mujer|pareos?|leotardos?|medias)\b/i;
+    const MEN_GARMENT_RX = /\b(calzoncillos?|b[oó]xers?|corbatas?|pajaritas?)\b/i;
     const sexOk = p => {
       const t = (p.title||'');
       if (KIDS_RX.test(t)) return false;                       // adultos siempre
-      if (sexWord === 'hombre' && WOMEN_RX.test(t) && !MEN_RX.test(t)) return false;
-      if (sexWord === 'mujer' && MEN_RX.test(t) && !WOMEN_RX.test(t)) return false;
+      if (sexWord === 'hombre' && (WOMEN_GARMENT_RX.test(t) || (WOMEN_RX.test(t) && !MEN_RX.test(t)))) return false;
+      if (sexWord === 'mujer' && (MEN_GARMENT_RX.test(t) || (MEN_RX.test(t) && !WOMEN_RX.test(t)))) return false;
       return true;
     };
+    // basura gráfica que este perfil de usuario jamás llevaría
+    const UGLY_RX = /metralleta|ak-?47|pistol[as]|rifle|uzi|kalashnikov|marihuana|cannabis|weed\b|calaveras? gigante|gore|zombi/i;
+    const tasteOk = p => !UGLY_RX.test(p.title||'');
+    // suelo de precio relativo: quien gasta 60€/prenda no quiere camisetas de 6€
+    const priceFloorOk = p => !avgPrice || !p.price_value || p.price_value >= Math.max(9, avgPrice*0.22);
+    // tiendas de calidad conocidas: suben en el orden
+    const GOOD_SRC = /zalando|corte ingl[eé]s|asos|about you|scalpers|massimo dutti|zara|mango|nike|adidas|spartoo|footdistrict|farfetch|end\.|mr ?porter|sn(ea)?kers|deporvillage|barrabes|wiggle|bikeinn|tradeinn|decathlon|oteros|sprinter/i;
+    const qualityScore = p => (GOOD_SRC.test(p.source||'')?2:0) + (p.price_value?1:0);
     // segunda mano NUNCA se cuela en el canal "nuevo"
     const USED_RX = /vinted|wallapop|micolet|depop|milanuncios|vestiaire|segunda mano|seminuevo|usado|percentil|cash converters|vibbo|reciclad/i;
     const channelOk = p => channel === 'used' ? true : !(USED_RX.test(p.source||'') || USED_RX.test(p.title||''));
@@ -191,7 +202,7 @@ module.exports = async function handler(req, res) {
       if (avgPrice >= 35 && LOW_RX.test(s)) return false;
       return true;
     };
-    const smartOk = p => sexOk(p) && channelOk(p) && segmentOk(p);
+    const smartOk = p => sexOk(p) && channelOk(p) && segmentOk(p) && tasteOk(p) && priceFloorOk(p);
     // el sexo va en TODAS las queries, no solo en la genérica
     const withSex = q => (sexWord && !/hombre|mujer|man|woman|men|women/i.test(q)) ? q + ' ' + sexWord : q;
 
