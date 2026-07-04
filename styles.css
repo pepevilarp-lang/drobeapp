@@ -740,3 +740,32 @@ input::placeholder{color:var(--ink3);opacity:.75}
 .pub-title{font-family:var(--serif);font-size:31px;font-weight:500;line-height:1.12;margin-top:14px}
 .pub-title em{font-style:italic;color:#EDE0C8}
 .pub-meta{font-size:12.5px;color:#B9AE9C;margin-top:8px}
+
+.pt-empty{grid-column:1/-1;text-align:center;padding:36px 16px;color:var(--ink2);font-size:14px;line-height:1.55}
+.pt-empty-t{font-family:var(--serif);font-size:20px;font-style:italic;color:var(--ink);margin-bottom:8px}
+
+.fr-info{position:absolute;bottom:8px;right:8px;width:30px;height:30px;border-radius:999px;background:rgba(250,248,244,.92);color:var(--ink);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+
+/* puertas: destello, brillo y polvo dorado */
+.doors-light{position:absolute;inset:0;background:radial-gradient(ellipse 30% 100% at 50% 50%,rgba(246,236,214,.95),rgba(246,236,214,0) 70%);opacity:0;transition:opacity 1.1s var(--ease) .25s;pointer-events:none;z-index:1}
+.doors.open .doors-light{opacity:1;animation:lightFade 1.6s .7s forwards}
+@keyframes lightFade{to{opacity:0}}
+.door{z-index:2}
+.doors-logo{z-index:3}
+.knob::after{content:'';position:absolute;inset:0;border-radius:99px;background:linear-gradient(180deg,rgba(255,255,255,.85),transparent 40%);animation:knobGlint 2.6s ease-in-out infinite}
+@keyframes knobGlint{0%,100%{opacity:.25}50%{opacity:.9}}
+.dl-name{animation:dlPulse 2.2s ease-in-out infinite,dlTrack 1.2s var(--ease) both}
+@keyframes dlTrack{from{letter-spacing:.3em;opacity:0}to{letter-spacing:-.02em;opacity:1}}
+.dl-dust{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.dl-dust i{position:absolute;bottom:-6px;width:3px;height:3px;border-radius:99px;background:rgba(232,201,168,.7);animation:dustUp linear infinite}
+@keyframes dustUp{from{transform:translateY(0);opacity:0}12%{opacity:.8}to{transform:translateY(-105vh);opacity:0}}
+.pub-hero{animation:heroUp 1s .8s var(--ease) both}
+@keyframes heroUp{from{transform:translateY(18px);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion: reduce){.dl-dust i,.knob::after{animation:none}}
+
+/* multi-prenda */
+.mp-card{background:var(--surface);border:1px solid var(--hair);border-radius:var(--r-m);margin-bottom:10px;overflow:hidden}
+.mp-head{display:flex;align-items:center;gap:10px;padding:13px 14px;cursor:pointer}
+.mp-num{width:24px;height:24px;border-radius:999px;background:var(--noir);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none}
+.mp-t{flex:1;font-size:14px;font-weight:600}
+.mp-body{padding:0 14px 14px}
