@@ -6,8 +6,8 @@ async function load3D(){
   try{ _ward3d = await import('./wardrobe3d.js'); return _ward3d; }
   catch(e){ return null; }
 }
-function unmountWardrobe3D(){ try{ _ward3d?.unmountWardrobe3D?.(); }catch(e){} }
-function resetView(){ try{ _ward3d?.resetView?.(); }catch(e){} }
+function unmountWardrobe3D(){ try{ _ward3d?.unmountWardrobe3D?.(); }catch(e){ logError('wardrobe3d.unmount', e); } }
+function resetView(){ try{ _ward3d?.resetView?.(); }catch(e){ logError('wardrobe3d.resetView', e); } }
 
 /* Manejo de errores visible en móvil (si la app no llega a renderizar) */
 window.addEventListener('error',e=>{
@@ -22,6 +22,22 @@ window.addEventListener('error',e=>{
   }
 });
 import * as cloud from './lib/supabase.js';
+import { logError, guard, installGlobalHandlers, onError as onLoggedError, errorLog, clearErrorLog, errorReport } from './lib/log.js';
+import * as taste from './lib/taste.js';
+
+installGlobalHandlers();
+
+/* Un fallo que afecta al usuario se le dice. Los demás quedan registrados en
+   Perfil → Diagnóstico. Lo que NO puede volver a pasar es que no pase nada. */
+onLoggedError(entry => {
+  if (!entry.user) return;
+  const old = document.getElementById('errtoast'); if (old) old.remove();
+  const el = document.createElement('div');
+  el.id = 'errtoast'; el.className = 'syncwarn err';
+  el.textContent = entry.user;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+});
 
 let session = null;
 
@@ -113,10 +129,22 @@ const SEED = [
 const KEY = 'drobe.v3';
 let store = load();
 function load(){
-  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];s.tickets=s.tickets||[];s.wishlist=s.wishlist||[];s.scanLog=s.scanLog||[];s.deletedIds=s.deletedIds||[];return s;}} }catch(e){}
+  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];s.tickets=s.tickets||[];s.wishlist=s.wishlist||[];s.scanLog=s.scanLog||[];s.deletedIds=s.deletedIds||[];return s;}} }
+  catch(e){
+    // se guarda la copia corrupta antes de empezar de cero: es recuperable
+    try{ localStorage.setItem(KEY+'.corrupto', localStorage.getItem(KEY)||''); }catch(e2){}
+    logError('load', e, {user:'No se pudo leer tu armario guardado. He empezado de cero en este dispositivo; si tienes cuenta, inicia sesión para recuperarlo.', fatal:true});
+  }
   return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[]};
 }
-function save(){ try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){} }
+function save(){
+  // cualquier cambio del armario invalida el perfil de gusto memoizado
+  invalidateTaste();
+  try{ localStorage.setItem(KEY,JSON.stringify(store)); }
+  catch(e){
+    logError('save', e, {user:'No se pudo guardar en este dispositivo. Puede que no quede espacio.'});
+  }
+}
 function showSyncWarning(reason){
   const old=document.getElementById('syncwarn'); if(old)old.remove();
   const el=document.createElement('div'); el.id='syncwarn'; el.className='syncwarn';
@@ -138,80 +166,74 @@ function addGarment(g){
       .catch(e=>showSyncWarning(e&&e.message));
   } else showSyncWarning('no_session');
 }
-/* ═══ FASHION PROFILE: el perfil vivo del usuario ═══
-   Aprende de TODAS las señales reales: armario, usos, ventas, wishlist,
-   escaneos en tienda, funnel de compra. Nunca inventa; solo observa. */
+/* ═══ MOTOR DE GUSTOS ═══
+   La lógica vive en lib/taste.js (módulo puro, con pruebas en lib/taste.test.mjs).
+   Aquí solo queda el pegamento: memoización y la firma que ya usaba la app.
+
+   Qué aprende, todo de señales reales y nunca inventadas:
+   - marcas ponderadas por uso, gasto y recencia (venderlas o no ponérselas resta)
+   - bandas de precio POR CATEGORÍA (un abrigo se compara con abrigos, no con
+     el ticket medio global: ese era el fallo que descartaba prendas buenas)
+   - paleta de color ponderada por uso real
+   - saturación del armario: qué tiene ya de sobra y qué le falta
+   - tallas por marca y por categoría
+   - qué rechaza en tienda y por qué
+   - cuánta confianza merece el perfil (con 4 prendas no se afirma nada) */
+let _tasteCache = null, _tasteKey = '';
+function tasteProfile(){
+  // el perfil se recalcula solo cuando cambia algo que lo afecta
+  const key = store.garments.length + '|' + (store.scanLog||[]).length + '|' +
+    (store.wishlist||[]).length + '|' + JSON.stringify(store.profile?.likedBrands||[]) +
+    '|' + (store.profile?.sex||'') + '|' + store.garments.reduce((s,g)=>s+(g.worn||0),0);
+  if(_tasteCache && _tasteKey === key) return _tasteCache;
+  try{
+    _tasteCache = taste.buildTasteProfile(store);
+    _tasteKey = key;
+  }catch(e){
+    logError('tasteProfile', e);
+    _tasteCache = taste.buildTasteProfile({garments:[],profile:store.profile||{}});
+    _tasteKey = '';
+  }
+  return _tasteCache;
+}
+function invalidateTaste(){ _tasteKey=''; }
+
+// compatibilidad con el código existente, que espera estos campos
 function fashionProfile(){
-  const gs=store.garments.filter(g=>(g.context||'calle')==='calle');
-  const active=gs.filter(g=>g.status!=='venta');
-  const cnt=(arr,key)=>{const o={};arr.forEach(x=>{const k=typeof key==='function'?key(x):x[key];if(k)o[k]=(o[k]||0)+1;});return o;};
-  const topN=(o,n=5)=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,n).map(([k])=>k);
-  // marcas ponderadas por USO real, no solo posesión
-  const brandWeight={};
-  active.forEach(g=>{ if(g.brand&&g.brand!=='—') brandWeight[g.brand]=(brandWeight[g.brand]||0)+1+(g.worn||0)*0.5; });
-  const topBrands=Object.entries(brandWeight).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k])=>k);
-  // señales negativas: lo que vende o nunca usa
-  const soldBrands=topN(cnt(gs.filter(g=>g.status==='venta'),'brand'),3);
-  // estampados: ¿es un usuario de prenda lisa?
-  const PRINT_RX=/estampad|print|gr[aá]fic|logo grande|flores|dibujo|graphic/i;
-  const printed=active.filter(g=>PRINT_RX.test((g.name||'')+' '+(g.tags||[]).join(' '))).length;
-  const plainRatio=active.length?1-(printed/active.length):1;
-  // sexo: del perfil, o aprendido del armario si no está declarado
-  const FEM_CATS=/vestido|falda|blusa|bikini|tac[oó]n/i;
-  const femCount=gs.filter(g=>FEM_CATS.test(g.cat||'')).length;
-  const sex=store.profile?.sex||(femCount>gs.length*0.15?'Mujer':gs.length>=5?'Hombre':'');
-  const prices=active.map(g=>+g.price||0).filter(p=>p>0);
-  const avgPrice=prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:0;
+  const P = tasteProfile();
   return {
-    sex, age:store.profile?.age||null, avgPrice,
-    topBrands, soldBrands,
-    colors:topN(cnt(active,'color'),6),
-    materials:topN(cnt(active,'material'),4),
-    fits:topN(cnt(active,'fit'),3),
-    cats:topN(cnt(active,g=>g.catGroup||g.cat),6),
-    formality:topN(cnt(active,'formality'),2),
-    plainRatio, // 1 = todo liso, 0 = todo estampado
-    wishBrands:topN(cnt(store.wishlist||[],'brand'),3),
-    likedBrands:(store.profile?.likedBrands)||[],
-    scanBrands:topN(cnt(store.scanLog||[],'brand'),3),
-    adjBrands:(store.profile?.adjBrands?.list)||[]
+    ...P,
+    colors: P.topColors,
+    materials: P.topMaterials,
+    fits: P.topFit ? [P.topFit] : [],
+    cats: Object.keys(P.saturation),
+    soldBrands: P.rejectedBrands,
+    wishBrands: (store.wishlist||[]).map(w=>w.brand).filter(Boolean).slice(0,3),
+    likedBrands: store.profile?.likedBrands||[],
+    scanBrands: (store.scanLog||[]).map(s=>s.brand).filter(Boolean).slice(0,3),
+    adjBrands: store.profile?.adjBrands?.list||[]
   };
 }
 
-/* ═══ STYLE MATCH SCORE: 0-100 por producto. Umbral duro: antes cero que mediocre ═══ */
-function styleMatchScore(o,P,hints){
-  const t=((o.title||'')+' '+(o.source||'')).toLowerCase();
-  let score=55;
-  const affinity=[...P.topBrands,...P.wishBrands,...P.scanBrands,...P.adjBrands,...(P.likedBrands||[]),...((hints&&hints.brandHints)||[])];
-  if(affinity.some(b=>b&&b!=='—'&&t.includes(String(b).toLowerCase())))score+=20;
-  if(P.soldBrands.some(b=>b&&b!=='—'&&t.includes(b.toLowerCase())))score-=15;
-  if(P.colors.some(c=>c&&c!=='—'&&t.includes(c.toLowerCase())))score+=8;
-  if(P.materials.some(mt=>mt&&t.includes(mt.toLowerCase())))score+=6;
-  if(o.price_value&&P.avgPrice>0){
-    const r=o.price_value/P.avgPrice;
-    if(r>=0.4&&r<=1.8)score+=8; else if(r<0.25||r>3)score-=18;
-  } else if(o.price_value>=15&&o.price_value<=250) score+=6; // sin ticket medio conocido: rango razonable
-  if(P.plainRatio>0.7&&/estampad|graphic|print|dibujo|anime|calavera|patches|y2k|oversize logo|big logo/i.test(t))score-=25;
-  if(/zalando|corte ingl|asos\b|about you|scalpers|massimo|zara\b|mango\b|nike|adidas|farfetch|end\.|mr ?porter|footdistrict|deporvillage|tradeinn|decathlon/i.test(t)||((hints&&hints.brandHints)||[]).some(b=>b&&(o.source||'').toLowerCase().includes(String(b).toLowerCase())))score+=8;
-  return Math.max(0,Math.min(100,Math.round(score)));
-}
+/* Puntuación 0-100 de un producto. Devuelve solo el número por compatibilidad;
+   scoreOfferFull() da además las razones, que es lo que se pinta en pantalla. */
+function styleMatchScore(o,P,hints){ return taste.scoreOffer(o, P||tasteProfile(), hints||{}).score; }
+function scoreOfferFull(o,hints){ return taste.scoreOffer(o, tasteProfile(), hints||{}); }
 
-/* ═══ CURACIÓN: puntúa, filtra por umbral y diversifica como un estilista ═══ */
-function curateOffers(items,{threshold=80,maxPerBrand=3,brandHints=[]}={}){
-  const P=fashionProfile();
-  const scored=items.map(o=>({o,s:styleMatchScore(o,P,{brandHints})})).filter(x=>x.s>=threshold)
-    .sort((a,b)=>b.s-a.s);
-  const out=[],count={},last=[];
-  const keyOf=x=>{const t=(x.o.title||'').toLowerCase();return P.topBrands.find(b=>t.includes(b.toLowerCase()))||x.o.source||'?';};
-  const pool=[...scored];
-  while(pool.length&&out.length<12){
-    let idx=pool.findIndex(x=>{const k=keyOf(x);return (count[k]||0)<maxPerBrand&&!(last[0]===k&&last[1]===k);});
-    if(idx<0)idx=0;
-    const x=pool.splice(idx,1)[0];const k=keyOf(x);
-    count[k]=(count[k]||0)+1;last.unshift(k);last.length=2;
-    out.push(x.o);
+/* Curación: puntúa, corta por umbral, deduplica y diversifica.
+   Cada resultado sale con _score y _reasons para poder explicar el porqué. */
+function curateOffers(items,{threshold=80,maxPerBrand=3,brandHints=[],max=12}={}){
+  try{
+    return taste.curate(items, tasteProfile(), {threshold,maxPerBrand,brandHints,max});
+  }catch(e){
+    logError('curateOffers', e, {extra:{count:items?.length}});
+    return (items||[]).slice(0,6);
   }
-  return out;
+}
+/* Por qué no salió nada: mejor que una pantalla vacía sin explicación. */
+function explainNoOffers(items,hints){
+  try{ return taste.explainEmpty(items, tasteProfile(), hints||{}); }
+  catch(e){ return 'No he encontrado nada que encaje con tu estilo.'; }
 }
 
 /* marcas equivalentes: mismo estilo y segmento, distinto logo (caché semanal) */
@@ -529,37 +551,31 @@ function computeStyleDNA(ctx='calle'){
 // Contexto del usuario: lo que Drobe sabe de él para personalizar TODO.
 // Cuantas más prendas tenga, más rico es este perfil → mejores recomendaciones.
 function userContext(){
-  const dna=computeStyleDNA();
-  const p=store.profile||{};
-  const brands=(dna.topBrands||[]).map(b=>b.brand);
-  const colors=(dna.topColors||[]).map(c=>c.color);
+  const P=tasteProfile();
   return {
-    sex: p.sex && p.sex!=='Prefiero no decir' ? p.sex : '',
-    age: p.age || '',
-    segment: dna.segment || '',          // premium / mid / budget
-    avgPrice: dna.avgPrice || 0,          // ticket medio
-    topBrands: brands,                    // marcas que ya usa
-    topColors: colors,                    // colores que lleva
-    topFit: dna.topFit || '',             // corte preferido
-    topFormality: dna.topFormality || '', // registro
-    materials: dna.topMaterials || [],
-    garmentCount: dna.garmentCount || 0
+    sex: P.sex||'',
+    age: P.age||'',
+    segment: P.segment==='unknown'?'':P.segment,  // premium / mid / budget
+    avgPrice: Math.round(P.avgPrice)||0,          // ticket medio
+    topBrands: P.topBrands.slice(0,6),            // marcas que ya usa, por afinidad real
+    topColors: P.topColors.slice(0,5),            // colores que lleva, ponderados por uso
+    topFit: P.topFit||'',                         // corte preferido
+    topFormality: P.topFormality||'',             // registro
+    materials: P.topMaterials||[],
+    sizes: P.sizeByCat||{},                       // qué talla gasta en cada cosa
+    priceBands: P.priceBands||{},                 // cuánto paga por categoría
+    gaps: P.gaps||[],                             // qué le falta
+    confidence: P.confidence,
+    garmentCount: P.garmentCount||0
   };
 }
-// Frase de contexto lista para inyectar en prompts de IA
+/* Frase de contexto para los prompts de IA.
+   Mucho más rica que antes: precios por categoría, tallas, saturación, huecos,
+   marcas rechazadas y dónde compra. Es lo que hace que el modelo acierte en vez
+   de recomendar genéricamente. */
 function userContextPrompt(){
-  const u=userContext();
-  if(!u.garmentCount) return 'El usuario aún no tiene prendas registradas; no asumas gustos.';
-  const parts=[];
-  if(u.sex) parts.push(`Sexo: ${u.sex}`);
-  if(u.age) parts.push(`Edad: ${u.age}`);
-  if(u.segment) parts.push(`Segmento de precio: ${u.segment} (gasta de media ${u.avgPrice}€ por prenda)`);
-  if(u.topBrands.length) parts.push(`Marcas que ya usa: ${u.topBrands.join(', ')}`);
-  if(u.topColors.length) parts.push(`Colores habituales: ${u.topColors.join(', ')}`);
-  if(u.topFit) parts.push(`Corte preferido: ${u.topFit}`);
-  if(u.topFormality) parts.push(`Registro: ${u.topFormality}`);
-  if(u.materials.length) parts.push(`Materiales frecuentes: ${u.materials.join(', ')}`);
-  return 'PERFIL DEL USUARIO (úsalo para personalizar y acertar):\n'+parts.map(x=>'- '+x).join('\n');
+  try{ return taste.profilePrompt(tasteProfile()); }
+  catch(e){ logError('userContextPrompt', e); return 'El usuario aún no tiene prendas registradas; no asumas gustos.'; }
 }
 
 // Drobe Score (0-100): salud del armario
@@ -586,11 +602,11 @@ function trackScanEvent(data){
   const events=JSON.parse(localStorage.getItem('drobe.scan_events')||'[]');
   events.push({...data, ts: new Date().toISOString()});
   localStorage.setItem('drobe.scan_events', JSON.stringify(events.slice(-100)));
-  if(session) cloud.trackEvent('scan', data).catch(()=>{});
+  if(session) cloud.trackEvent('scan', data).catch(e=>logError('trackEvent.scan', e));
 }
 function trackPurchaseEvent(data){
   if(!store.profile?.consent_analytics) return;
-  if(session) cloud.trackEvent('purchase', data).catch(()=>{});
+  if(session) cloud.trackEvent('purchase', data).catch(e=>logError('trackEvent.purchase', e));
 }
 
 /* ═══════════════════════════════════════════
@@ -767,7 +783,22 @@ function render(){
         return `<button data-t="${t.k}" class="${on?'on':''}">${add?`<span class="add">${svg('add',22,2)}</span>`:svg(t.i,21)+`<span class="lbl">${t.l}</span>`}</button>`;}).join('')}
     </div></div></div>`;
   const m=document.getElementById('main');
-  ({armario:vArmario,estilista:vEstilista,add:vAdd,insights:vInsights,perfil:vPerfil}[route]||vArmario)(m);
+  /* Si una vista revienta, antes te quedabas con la pantalla en blanco y la
+     navegación muerta. Ahora la pestaña falla sola, lo dice, y el resto de la
+     app sigue usable. */
+  try{
+    ({armario:vArmario,estilista:vEstilista,add:vAdd,insights:vInsights,perfil:vPerfil}[route]||vArmario)(m);
+  }catch(e){
+    logError('vista:'+route, e, {fatal:true});
+    m.innerHTML=`<div class="reveal" style="padding:40px 0">
+      <div class="title" style="font-size:26px">Esta pantalla ha fallado</div>
+      <div class="sub">El resto de la app sigue funcionando. El detalle está guardado en Perfil → Diagnóstico.</div>
+      <button class="btn dark" id="verr" style="margin-top:18px">Reintentar</button>
+      <button class="btn ghost" id="verrh" style="margin-top:8px">Ir al armario</button>
+    </div>`;
+    m.querySelector('#verr').onclick=()=>render();
+    m.querySelector('#verrh').onclick=()=>go('armario');
+  }
   app.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>go(b.dataset.t));
   const social=document.getElementById('top_social'); if(social)social.onclick=()=>openSocial();
   if(session)refreshUnread();
@@ -939,7 +970,7 @@ function renderFicha(){
       g.photos=g.photos||[];
       for(const file of files){
         if(1+g.photos.length>=4)break;
-        try{ const im=await imageToBase64(file,900,0.82); g.photos.push(im.dataUrl); }catch(err){}
+        try{ const im=await imageToBase64(file,900,0.82); g.photos.push(im.dataUrl); }catch(err){ logError('ficha.addPhoto', err, {user:'No se pudo añadir esa foto. Prueba con otra.'}); }
       }
       save(); if(session)cloud.pushGarment(g);
       haptic(); renderFicha();
@@ -954,7 +985,7 @@ function renderFicha(){
     store.garments=store.garments.filter(x=>x.id!==g.id);
     store.deletedIds=store.deletedIds||[]; store.deletedIds.push(g.id);
     save(); haptic(14);
-    if(session)cloud.deleteGarmentCloud(g.id).then(r=>{ if(r&&r.ok){ store.deletedIds=store.deletedIds.filter(i=>i!==g.id); save(); } }).catch(()=>{});
+    if(session)cloud.deleteGarmentCloud(g.id).then(r=>{ if(r&&r.ok){ store.deletedIds=store.deletedIds.filter(i=>i!==g.id); save(); } }).catch(e=>logError('deleteGarmentCloud', e, {user:'La prenda se ha borrado aquí, pero no en la nube. Se reintentará.'}));
     el.remove(); fichaId=null; render(); toast('Prenda eliminada');
   };
   el.querySelector('#wear').onclick=()=>{ haptic(); g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
@@ -1006,7 +1037,7 @@ async function prepararVenta(g,plataforma){
     const d=el.querySelector('#s_desc')?.value||`${g.brand} ${g.name}. Talla ${g.size||'-'}. ${g.cond||'Buen estado'}.`;
     const p=el.querySelector('#s_precio')?.value;
     const texto=t+(p?` · ${p}€`:'')+'\n\n'+d;
-    try{ await navigator.clipboard.writeText(texto); }catch(e){}
+    try{ await navigator.clipboard.writeText(texto); }catch(e){ logError('copiar', e, {user:'Tu navegador no dejó copiar. Selecciona el texto a mano.'}); }
     try{
       if(g.img&&navigator.canShare){
         const blob=await (await fetch(g.img)).blob();
@@ -1736,9 +1767,29 @@ En "alternativas" propón 3 prendas de OTRAS marcas reales (Mango, Zara, Massimo
         altBox.innerHTML=`<a class="offer" href="${gSearch2(q+(brand?' '+brand:''))}" target="_blank" rel="noopener"><div class="offer-img">${svg('tag',20)}</div><div class="offer-info"><div class="offer-t">Buscar "${q}" en Google Shopping</div><div class="offer-s">Comparar precios</div></div><div class="offer-p">${svg('chev',18)}</div></a>`;
       }
     }
-    const logScan=(bought)=>{
+    /* El motivo del rechazo es la señal más valiosa del escáner: enseña a Drobe
+       qué NO recomendar. Si el usuario no lo dice, se deduce de lo que sabemos:
+       ya tiene algo igual, o está por encima de lo que paga en esa categoría. */
+    const guessReason=()=>{
+      if(similar.length) return 'already_have';
+      try{
+        const P=tasteProfile();
+        const cat=catToGroup(productType||q||'');
+        const band=P.priceBands[cat]||P.globalBand;
+        if(price&&band&&price>(band.median||band.avg)*P.priceCeilingFactor) return 'too_expensive';
+      }catch(e){ logError('guessReason',e); }
+      return 'user_choice';
+    };
+    const logScan=(bought,rejection)=>{
       store.scanLog=store.scanLog||[];
-      store.scanLog.unshift({brand:brand||'',verdict:r?.veredicto||'',bought,at:new Date().toISOString()});
+      store.scanLog.unshift({
+        brand:brand||'', verdict:r?.veredicto||'', bought,
+        rejection: bought?null:(rejection||null),
+        price: price||null,
+        cat: catToGroup(productType||q||'')||null,
+        store: storeName||null,
+        at:new Date().toISOString()
+      });
       if(store.scanLog.length>200)store.scanLog.length=200;
       save();
     };
@@ -1749,8 +1800,9 @@ En "alternativas" propón 3 prendas de OTRAS marcas reales (Mango, Zara, Massimo
       setTimeout(()=>showPrenda(document.getElementById('main'),{brand,name:q,price},null),100);
     };
     out.querySelector('#sc_no').onclick=()=>{
-      logScan(false);
-      trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'rejected',rejection_reason:similar.length?'already_have':'user_choice'});
+      const reason=guessReason();
+      logScan(false,reason);
+      trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'rejected',rejection_reason:reason});
       el.remove();
     };
     this.disabled=false; this.innerHTML=`${svg('target',18)} Buscar otra`;
@@ -2079,7 +2131,25 @@ const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">D</d
    ASESOR DE COMPRA
 ═══════════════════════════════════════════ */
 function wardrobeSummary(){ return store.garments.filter(g=>g.status!=='venta').map(g=>`${g.cat} ${g.color} (${g.brand})`).join(', '); }
-const offerRowHTML=o=>`<a class="offer" href="${o.link}" target="_blank" rel="noopener"><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${o.title}</div><div class="offer-s">${o.source}</div></div><div class="offer-p">${o.price||''}</div></a>`;
+/* Cada recomendación enseña por qué está ahí. No es adorno: si Drobe falla la
+   puntería, el usuario ve el motivo y nosotros podemos corregirlo. */
+const offerRowHTML=o=>{
+  const reasons=(o._reasons||[]).slice(0,2);
+  const warn=(o._warnings||[])[0];
+  const sc=typeof o._score==='number'?o._score:null;
+  return `<a class="offer" href="${o.link}" target="_blank" rel="noopener">
+    <div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${o.thumbnail}"/>`:svg('tag',20)}</div>
+    <div class="offer-info">
+      <div class="offer-t">${esc(o.title||'')}</div>
+      <div class="offer-s">${esc(o.source||'')}</div>
+      ${reasons.length?`<div class="offer-why">${reasons.map(r=>`<span>${esc(r)}</span>`).join('')}</div>`:''}
+      ${warn?`<div class="offer-warn">${esc(warn)}</div>`:''}
+    </div>
+    <div class="offer-right">
+      <div class="offer-p">${esc(o.price||'')}</div>
+      ${sc!==null?`<div class="offer-score ${sc>=88?'hi':''}">${sc}</div>`:''}
+    </div></a>`;
+};
 /* añadido de segunda mano: SIEMPRE después de lo nuevo, nunca mezclado */
 async function appendUsedSection(container,params){
   if(!store.profile?.consent_marketing)return; // el usuario decide si quiere sugerencias extra
@@ -2302,7 +2372,7 @@ async function openParaTi(){
   if(!curated.length){
     grid.outerHTML=`<div class="pt-empty">${results.every(r=>r===null)
       ?'Activa SERPAPI_KEY en Vercel para ver productos reales.'
-      :`<div class="pt-empty-t">Hoy no hay nada a tu altura.</div><div>He revisado ${items.length} productos y ninguno supera el listón de tu estilo. Antes cero que mediocre — vuelve mañana.</div>`}</div>`;
+      :`<div class="pt-empty-t">Hoy no hay nada a tu altura.</div><div>${esc(explainNoOffers(items))}</div>`}</div>`;
     return;
   }
   grid.innerHTML=curated.slice(0,8).map(o=>`
@@ -2485,7 +2555,7 @@ function vInsights(m){
   save();
   if(session){
     if(store.profile.consent_data_b2b){
-      cloud.updateProfile({style_dna:dna,drobe_score:store.profile.drobe_score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(()=>{});
+      cloud.updateProfile({style_dna:dna,drobe_score:store.profile.drobe_score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(e=>logError('updateProfile', e));
     }
   }
 }
@@ -2526,6 +2596,11 @@ function vPerfil(m){
     <button class="opt" id="p_b2b" style="margin-bottom:12px">
       <span class="ring" style="background:var(--noir);color:#E8C9A8">${svg('chart',22)}</span>
       <div><div class="t1">Drobe for Brands</div><div class="t2">Demo de la vista para marcas · datos reales agregados</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
+    <button class="opt" id="p_diag" style="margin-bottom:12px">
+      <span class="ring">${svg('shield',22)}</span>
+      <div><div class="t1">Diagnóstico</div><div class="t2">${(()=>{const n=errorLog().length;return n?`${n} incidencia(s) registrada(s)`:'Sin incidencias registradas';})()}</div></div>
       <span class="arr">${svg('chev',20)}</span></button>
     <div id="strava_slot"></div>
 
@@ -2607,6 +2682,7 @@ function vPerfil(m){
   }
   m.querySelector('#p_maletas')?.addEventListener('click',()=>openMaletasGuardadas());
   m.querySelector('#p_tour')?.addEventListener('click',()=>{ try{localStorage.removeItem('drobe.tour');}catch(e){} startTour(); });
+  m.querySelector('#p_diag')?.addEventListener('click',()=>openDiagnostico());
   m.querySelector('#p_b2b')?.addEventListener('click',()=>openB2BDemo());
   m.querySelectorAll('[data-sheet]').forEach(b=>b.onclick=()=>openSettingsSheet(b.dataset.sheet));
   stravaConfig().then(cfg=>{
@@ -2623,7 +2699,7 @@ function vPerfil(m){
   // medidas
   ['altura','peso','pecho','cintura','pie'].forEach(k=>{
     const e=m.querySelector(`#ms_${k}`);
-    if(e)e.onchange=()=>{ store.profile=store.profile||{}; store.profile.measures=store.profile.measures||{}; store.profile.measures[k]=e.value; save(); if(session)cloud.updateProfile({measures:store.profile.measures}).catch(()=>{}); };
+    if(e)e.onchange=()=>{ store.profile=store.profile||{}; store.profile.measures=store.profile.measures||{}; store.profile.measures[k]=e.value; save(); if(session)cloud.updateProfile({measures:store.profile.measures}).catch(e=>logError('updateProfile', e)); };
   });
 
   // consentimientos — el activo B2B
@@ -2635,12 +2711,12 @@ function vPerfil(m){
     store.profile.consent_marketing=m.querySelector('#c_marketing')?.checked||false;
     // revocación real: al apagar el toggle de marcas, los agregados se BORRAN de la nube
     if(session&&wasB2b&&!store.profile.consent_data_b2b){
-      cloud.updateProfile({style_dna:null,drobe_score:null,segment:null,avg_price_per_item:null,total_wardrobe_value:null,brand_sizes:null,garment_count:null}).catch(()=>{});
+      cloud.updateProfile({style_dna:null,drobe_score:null,segment:null,avg_price_per_item:null,total_wardrobe_value:null,brand_sizes:null,garment_count:null}).catch(e=>logError('updateProfile', e));
       toast('Datos agregados retirados de la nube.');
     }
     store.profile.consent_at=new Date().toISOString();
     save();
-    if(session) cloud.updateProfile({consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:store.profile.consent_analytics,consent_marketing:store.profile.consent_marketing,consent_at:store.profile.consent_at}).catch(()=>{});
+    if(session) cloud.updateProfile({consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:store.profile.consent_analytics,consent_marketing:store.profile.consent_marketing,consent_at:store.profile.consent_at}).catch(e=>logError('updateProfile', e));
   };
   ['c_analytics','c_b2b','c_marketing'].forEach(id=>{ const e=m.querySelector('#'+id); if(e)e.onchange=saveConsents; });
 }
@@ -2795,7 +2871,7 @@ function renderWelcome(mode='intro'){
           store.profile.consent_analytics=true;
           store.profile.consent_at=new Date().toISOString();
           save();
-          cloud.updateProfile({name:store.profile.name,age:store.profile.age,sex:store.profile.sex,consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:true,consent_at:store.profile.consent_at}).catch(()=>{});
+          cloud.updateProfile({name:store.profile.name,age:store.profile.age,sex:store.profile.sex,consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:true,consent_at:store.profile.consent_at}).catch(e=>logError('updateProfile', e));
         }
         await syncFromCloud(); markSeen(); el.remove(); render(); maybeStartTour();
       } else {
@@ -3033,7 +3109,7 @@ async function refreshUnread(){
     const n=await cloud.unreadCount();
     const dot=document.getElementById('unread_dot');
     if(dot)dot.style.display=n>0?'block':'none';
-  }catch(e){}
+  }catch(e){ logError('refreshUnread', e); }
 }
 
 async function openSocial(){
@@ -3340,6 +3416,78 @@ function toast(txt){
   document.body.appendChild(el); setTimeout(()=>el.remove(),3500);
 }
 
+/* ═══ DIAGNÓSTICO ═══
+   Antes, cuando algo fallaba no quedaba rastro en ningún sitio. Aquí está todo:
+   qué ha fallado, con qué perfil está trabajando Drobe y si la nube responde.
+   El botón de copiar genera un informe pegable en un issue o en una
+   conversación con Claude. */
+function openDiagnostico(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='diag';
+  const P=(()=>{ try{ return tasteProfile(); }catch(e){ return null; } })();
+  const rows=errorLog().slice().reverse();
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="db">${svg('back',20)}</button><span class="t">Diagnóstico</span></div>
+
+    <div class="shead"><h2>Estado</h2></div>
+    <div class="diag">
+      <div class="diag-row"><b>Sesión</b> <span class="sc">${session?esc(session.user?.email||'iniciada'):'sin iniciar (solo local)'}</span></div>
+      <div class="diag-row"><b>Nube</b> <span class="sc">${cloud.cloudEnabled()?'configurada':'no configurada'}</span></div>
+      <div class="diag-row"><b>Prendas</b> <span class="sc">${store.garments.length} · ${(store.tickets||[]).length} tickets · ${(store.wishlist||[]).length} en wishlist</span></div>
+      <div class="diag-row"><b>Versión de caché</b> <span class="sc" id="dg_sw">—</span></div>
+      <div class="diag-row"><b>Conexión</b> <span class="sc">${navigator.onLine?'en línea':'sin conexión'}</span></div>
+    </div>
+
+    <div class="shead" style="margin-top:16px"><h2>Perfil de gusto</h2></div>
+    <div class="diag">
+      ${P?`
+      <div class="diag-row"><b>Fiabilidad</b> <span class="sc">${Math.round(P.confidence*100)}% ${P.confidence<0.4?'· aún con pocos datos':''}</span></div>
+      <div class="diag-row"><b>Marcas</b> <span class="sc">${esc(P.topBrands.slice(0,5).join(', ')||'—')}</span></div>
+      <div class="diag-row"><b>Descartadas</b> <span class="sc">${esc(P.rejectedBrands.slice(0,4).join(', ')||'—')}</span></div>
+      <div class="diag-row"><b>Paleta</b> <span class="sc">${esc(P.topColors.slice(0,4).join(', ')||'—')} · ${Math.round(P.neutralRatio*100)}% neutros</span></div>
+      <div class="diag-row"><b>Precio por categoría</b> <span class="sc">${esc(Object.entries(P.priceBands).filter(([,b])=>b.n>=2).map(([k,b])=>`${k} ${Math.round(b.p25)}-${Math.round(b.p75)}€`).join(' · ')||'—')}</span></div>
+      <div class="diag-row"><b>Tallas</b> <span class="sc">${esc(Object.entries(P.sizeByCat).map(([k,v])=>k+' '+v).join(' · ')||'—')}</span></div>
+      <div class="diag-row"><b>Huecos</b> <span class="sc">${esc(P.gaps.join(', ')||'ninguno')}</span></div>
+      `:'<div class="diag-empty">No se pudo calcular el perfil.</div>'}
+    </div>
+
+    <div class="shead" style="margin-top:16px"><h2>Incidencias (${rows.length})</h2></div>
+    <div class="diag" id="dg_errs">
+      ${rows.length?rows.slice(0,40).map(e=>`<div class="diag-row ${e.fatal?'fatal':''}">
+        <b>${esc(e.scope)}</b> <span class="sc">${esc(new Date(e.at).toLocaleString('es-ES'))}</span><br/>${esc(e.message||'')}
+      </div>`).join(''):'<div class="diag-empty">Nada que reportar. Todo ha ido bien.</div>'}
+    </div>
+
+    <button class="btn dark" id="dg_copy" style="margin-top:14px">${svg('file',17)} Copiar informe</button>
+    <button class="btn ghost" id="dg_probe" style="margin-top:8px">${svg('sync',17)} Probar conexión con la nube</button>
+    <button class="btn ghost" id="dg_clear" style="margin-top:8px">Borrar registro</button>
+    <div id="dg_out" class="sub" style="margin-top:10px"></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#db').onclick=()=>el.remove();
+
+  // versión del service worker activo
+  if(navigator.serviceWorker?.controller){
+    caches.keys().then(k=>{ const n=el.querySelector('#dg_sw'); if(n)n.textContent=k.join(', ')||'sin caché'; })
+      .catch(e=>logError('diag.caches',e));
+  } else { const n=el.querySelector('#dg_sw'); if(n)n.textContent='service worker no activo'; }
+
+  el.querySelector('#dg_copy').onclick=async function(){
+    const txt=errorReport()+'\n\nPERFIL\n'+(P?JSON.stringify({confidence:P.confidence,topBrands:P.topBrands,rejectedBrands:P.rejectedBrands,priceBands:P.priceBands,sizeByCat:P.sizeByCat,gaps:P.gaps,segment:P.segment},null,2):'no disponible');
+    try{ await navigator.clipboard.writeText(txt); this.innerHTML=`${svg('check',17)} Copiado`; }
+    catch(e){ logError('diag.copy',e); el.querySelector('#dg_out').textContent='No se pudo copiar. El informe también está en la consola.'; console.log(txt); }
+  };
+  el.querySelector('#dg_probe').onclick=async function(){
+    this.disabled=true; this.textContent='Probando…';
+    const out=el.querySelector('#dg_out');
+    try{
+      const d=await cloud.diagnose();
+      out.textContent=JSON.stringify(d);
+    }catch(e){ logError('diag.probe',e); out.textContent='Error: '+(e.message||e); }
+    this.disabled=false; this.innerHTML=`${svg('sync',17)} Probar conexión con la nube`;
+  };
+  el.querySelector('#dg_clear').onclick=()=>{ clearErrorLog(); el.remove(); openDiagnostico(); };
+}
+
 /* ═══ STRAVA: km reales de zapatillas y bicis ═══ */
 async function stravaConfig(){
   if(window._stravaCfg!==undefined)return window._stravaCfg;
@@ -3348,15 +3496,15 @@ async function stravaConfig(){
   return window._stravaCfg;
 }
 function stravaConnect(cfg){
-  try{localStorage.setItem('drobe.strava_pending','1');}catch(e){}
+  try{localStorage.setItem('drobe.strava_pending','1');}catch(e){ logError('strava.pending', e); }
   const redirect=encodeURIComponent(location.origin+location.pathname);
   location.href=`https://www.strava.com/oauth/authorize?client_id=${cfg.client_id}&redirect_uri=${redirect}&response_type=code&scope=read&approval_prompt=auto`;
 }
 async function stravaHandleReturn(){
   const code=new URLSearchParams(location.search).get('code');
-  let pending=false; try{pending=localStorage.getItem('drobe.strava_pending')==='1';}catch(e){}
+  let pending=false; try{pending=localStorage.getItem('drobe.strava_pending')==='1';}catch(e){ logError('strava.pending', e); }
   if(!code||!pending)return;
-  try{localStorage.removeItem('drobe.strava_pending');}catch(e){}
+  try{localStorage.removeItem('drobe.strava_pending');}catch(e){ logError('strava.pending', e); }
   history.replaceState(null,'',location.pathname);
   const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'token',code})}).then(x=>x.json()).catch(()=>null);
   if(r&&r.ok){
@@ -3490,19 +3638,26 @@ tryPublicView().then(isPublic=>{
   // precargar el motor de foto de estudio en segundo plano: cuando el usuario
   // lo toque por primera vez, el modelo ya está descargado (ahí está el wow)
   const idle=window.requestIdleCallback||(fn=>setTimeout(fn,4000));
-  idle(()=>{ loadBgLib().then(lib=>{ try{ lib&&lib.preload&&lib.preload(bgConfig()); }catch(e){} }).catch(()=>{}); });
+  idle(()=>{ loadBgLib().then(lib=>{ try{ lib&&lib.preload&&lib.preload(bgConfig()); }catch(e){ logError('bgRemoval.preload', e); } }).catch(e=>logError('bgRemoval.load', e)); });
   if(needsWelcome())setTimeout(()=>renderWelcome('intro'),300);
 });
-if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(e=>logError('serviceWorker', e)));
 
 async function initCloud(){
   if(!cloud.cloudEnabled())return;
   try{
     session=await cloud.getSession();
-    cloud.onAuth(async ns=>{session=ns;await syncFromCloud();safeRender();});
+    cloud.onAuth(async ns=>{
+      session=ns;
+      try{ await syncFromCloud(); }catch(e){ logError('syncFromCloud', e, {user:'No se pudo sincronizar con la nube. Tus cambios están guardados en este dispositivo.'}); }
+      safeRender();
+    });
     if(session)await syncFromCloud();
     safeRender();
-  }catch(e){}
+  }catch(e){
+    logError('initCloud', e, {user:'No se pudo conectar con la nube. La app funciona en local mientras tanto.'});
+    safeRender();
+  }
 }
 function safeRender(){ if(route==='add'&&addMode!=='choose')return; render(); }
 /* El almacenamiento local pertenece a UNA cuenta. Al entrar con una cuenta
@@ -3519,7 +3674,7 @@ async function syncFromCloud(){
   if(!session)return;
   alignStoreToAccount();
   await cloud.ensureProfile(); // garantizar FK antes de cualquier escritura
-  cloud.ensureSocialProfile().catch(()=>{}); // encontrable en Comunidad desde el primer login
+  cloud.ensureSocialProfile().catch(e=>logError('ensureSocialProfile', e)); // encontrable en Comunidad desde el primer login
   let rows=await cloud.pullGarments();
   if(rows===null) return; // error de red: conservar lo local, no tocar nada
   // tombstones: prendas borradas en local no deben resucitar JAMÁS.

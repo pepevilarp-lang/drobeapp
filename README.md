@@ -1,60 +1,156 @@
-# Drobe · MVP (PWA)
+# Drobe · el sistema operativo de tu armario
 
-Armario digital: escanea el ticket → la IA crea las prendas → organiza, vístete con el estilista IA, vende en un clic. Incluye **armario en 3D** (Three.js), tienda con **productos reales** y es **instalable y offline** (PWA).
+PWA en español. Escaneas el ticket o haces una foto → la IA crea las prendas →
+organizas el armario, te viste con el estilista, evitas comprar lo que ya tienes
+y vendes lo que no usas.
 
-Stack: HTML/JS vanilla (sin build) · Three.js (CDN) · Vercel (hosting + función serverless de IA) · Supabase (opcional, nube + auth).
+**Producción:** https://drobeapp-theta.vercel.app
+
+**Stack:** HTML/CSS/JS vanilla sin build · Three.js por CDN · Vercel (estático +
+funciones en `/api`) · Supabase (auth + Postgres + Storage) · Groq (IA) ·
+SerpApi (Google Shopping).
+
+---
 
 ## Estructura
+
 ```
-drobe/
-├─ index.html              # shell de la app (importmap de three)
-├─ styles.css              # sistema de diseño
-├─ app.js                  # estado, vistas, IA, persistencia local
-├─ wardrobe3d.js           # armario 3D (Three.js)
-├─ sw.js                   # service worker (offline)
-├─ manifest.webmanifest    # PWA
-├─ api/ai.js               # serverless: proxy IA (key en servidor)
-├─ lib/supabase.js         # cliente Supabase opcional
-├─ supabase/schema.sql     # tablas + RLS
-└─ assets/                 # imágenes de producto reales + iconos
+index.html              shell de la app (importmap de Three)
+styles.css              sistema de diseño
+app.js                  estado, vistas, IA, social  (monolito, ver «Pendiente»)
+wardrobe3d.js           armario en 3D
+sw.js                   service worker (offline)
+manifest.webmanifest    PWA
+
+lib/log.js              registro de errores  ← todo fallo pasa por aquí
+lib/taste.js            motor de gustos      ← puntuación de recomendaciones
+lib/taste.test.mjs      pruebas del motor (node lib/taste.test.mjs)
+lib/supabase.js         cliente de la nube: auth, sync, social, storage
+
+api/ai.js               proxy a Groq (texto y visión)
+api/shopping.js         búsqueda de productos con SerpApi
+api/strava.js           OAuth de Strava + km de zapatillas y bicis
+api/shoptest.js         diagnóstico de SerpApi
+
+supabase/schema.sql     esquema completo, idempotente y NO destructivo
+assets/                 iconos e imágenes de producto
 ```
 
-## 1) Probar en local
-Necesita un servidor (los módulos ES y el service worker no van por `file://`):
+---
+
+## Probar en local
+
+Los módulos ES y el service worker no funcionan por `file://`, hace falta un
+servidor:
+
 ```bash
-cd drobe
-npx serve .        # o: python3 -m http.server 8000
+npx serve .          # o: python3 -m http.server 8000
 ```
-Abre la URL que indique. Funciona sin backend: las prendas se guardan en `localStorage` y la IA usa un fallback heurístico si `/api/ai` no está disponible.
 
-> El **armario 3D** carga Three.js desde CDN: necesita conexión la primera vez.
+Sin backend también funciona: las prendas se guardan en `localStorage` y la IA
+cae a un parser heurístico si `/api/ai` no responde.
 
-## 2) Subir a GitHub
+Pruebas del motor de recomendación (sin dependencias, tarda menos de un segundo):
+
 ```bash
-cd drobe
-git init && git add . && git commit -m "Drobe MVP"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/drobe.git
-git push -u origin main
+node lib/taste.test.mjs
 ```
 
-## 3) Desplegar en Vercel
-1. vercel.com → **New Project** → importa el repo. No hace falta build (proyecto estático + funciones en `/api`).
-2. **Settings → Environment Variables** → añade `ANTHROPIC_API_KEY`.
-3. Deploy. Tu `/api/ai` ya funciona y el ticket/estilista usan IA real.
+---
 
-## 4) Activar Supabase (nube + login entre dispositivos)
-1. supabase.com → nuevo proyecto.
-2. **SQL Editor** → pega y ejecuta `supabase/schema.sql`.
-3. **Storage** → crea un bucket público `garments` para las fotos (opcional).
-4. En `lib/supabase.js` rellena `SUPABASE_URL` y `SUPABASE_ANON_KEY`. **Con eso ya funciona**: aparece el login en Perfil, el armario se sincroniza solo y se comparte entre dispositivos.
-5. Para pruebas rápidas, en Supabase → Authentication → Providers → Email, desactiva "Confirm email" (si no, hay que confirmar por correo antes de entrar).
+## Variables de entorno (Vercel → Settings → Environment Variables)
 
-## Notas
-- La key de IA **nunca** está en el cliente: el navegador llama a `/api/ai` y la función serverless añade la key.
-- Para abaratar, `api/ai.js` usa un modelo Haiku; cámbialo si quieres más calidad. También puedes apuntar a Groq (comentario en el archivo).
-- **OCR real**: al hacer foto del ticket, `lib/ocr.js` lo lee con Tesseract.js (español) en el navegador y pasa el texto a la IA. La primera vez descarga el motor (~unos MB) desde CDN, así que necesita conexión.
-- **Offline-first**: si no configuras Supabase ni IA, la app sigue funcionando con `localStorage` y un parser de tickets heurístico. Nada se descarga de más.
+| Variable | Para qué | Obligatoria |
+|---|---|---|
+| `GROQ_API_KEY` | `/api/ai` — reconocimiento de prendas y tickets, estilista | sí |
+| `SERPAPI_KEY` | `/api/shopping` — productos reales de Google Shopping | no |
+| `STRAVA_CLIENT_ID` | `/api/strava` | no |
+| `STRAVA_CLIENT_SECRET` | `/api/strava` | no |
 
-## Siguiente paso de verdad
-Esto sirve para ponerlo en manos de 30–50 personas que no conozcas y medir si vuelven (retención D30). Es lo único que dirá si Drobe tiene tracción antes de invertir más en features.
+Las credenciales de Supabase **no** van aquí: están dentro de `lib/supabase.js`
+porque tienen que llegar al navegador. La `anon key` es pública por diseño; quien
+protege los datos es RLS, no el secreto de la clave.
+
+---
+
+## Base de datos
+
+1. Supabase → **SQL Editor** → pega `supabase/schema.sql` → Run.
+2. Es idempotente y **no borra nada**: se puede ejecutar tantas veces como haga
+   falta, también sobre una base con datos.
+3. Crea también el bucket de Storage `tickets` (guarda tickets y avatares) con
+   sus políticas.
+4. Para probar rápido: Authentication → Providers → Email → desactiva *Confirm
+   email*.
+
+Tablas: `profiles`, `garments`, `tickets`, `maletas`, `wishlist`,
+`social_profiles`, `friendships`, `messages`, `search_cache`, `scan_events`,
+`purchase_events`.
+
+> Si cambias el esquema desde el panel, **actualiza también este fichero**. Que
+> dejaran de coincidir fue la causa de una tanda entera de fallos silenciosos:
+> Supabase rechaza una escritura por RLS o por columna inexistente sin devolver
+> error, y la app se quedaba tan tranquila.
+
+---
+
+## Despliegue
+
+Vercel, sin build (proyecto estático + funciones en `/api`). Importa el repo y
+listo.
+
+**En cada despliegue que toque `app.js`, `styles.css` o `lib/`: sube el número de
+`CACHE` en `sw.js`.** Si no, iOS puede seguir sirviendo la versión anterior.
+
+---
+
+## Cómo funciona el motor de gustos
+
+Vive en `lib/taste.js`. No inventa nada: cada señal viene de algo que el usuario
+ha hecho de verdad.
+
+- **Marcas** ponderadas por uso real, gasto y recencia. Ponerse algo pesa más que
+  tenerlo; ponerlo a la venta o no estrenarlo en seis meses resta.
+- **Precio por categoría, no global.** Un abrigo se compara con sus abrigos. El
+  motor anterior comparaba todo contra un único ticket medio y descartaba prendas
+  perfectamente razonables por «caras».
+- **Saturación.** Si ya tiene seis camisetas blancas, la séptima no es una buena
+  recomendación por muy bien que encaje en todo lo demás.
+- **Huecos.** Lo contrario: lo que no tiene y le hace falta.
+- **Paleta** ponderada por uso, y detección de estampados.
+- **Tallas** por marca y por categoría.
+- **Rechazos.** Lo que descarta en el escáner de tienda, y por qué: si rechaza
+  cosas por caras, el techo de precio baja.
+- **Confianza.** Con cuatro prendas no se puede afirmar nada, así que el motor
+  baja el umbral y lo dice, en vez de enseñar una pantalla vacía.
+
+Cada recomendación sale con su puntuación y sus motivos, visibles en la propia
+tarjeta. No es decoración: si Drobe falla la puntería, se ve por qué.
+
+---
+
+## Errores
+
+Todo fallo pasa por `logError()` de `lib/log.js`, que lo escribe en consola, lo
+guarda en un buffer local y —si afecta al usuario— lo enseña. Se consulta en
+**Perfil → Diagnóstico**, con un botón que copia un informe completo listo para
+pegar en un issue.
+
+Regla del proyecto: **no se escriben `catch` vacíos.** Si algo se puede ignorar,
+se ignora con un comentario que explique por qué.
+
+---
+
+## Pendiente
+
+- `app.js` sigue siendo un monolito de ~3.600 líneas. Trocearlo en `views/`,
+  `core/` y `features/` es la mejora que más acelera todo lo demás.
+- No hay pruebas más allá de `lib/taste.test.mjs`.
+- La versión de caché del service worker se sube a mano.
+- SerpApi: 100 búsquedas/mes en el plan gratuito. `search_cache` (24 h,
+  compartida entre usuarios) estira la cuota pero no elimina el techo.
+
+## El siguiente paso de verdad
+
+Ponerlo en manos de 30–50 personas desconocidas y medir si vuelven a los 30 días.
+Es lo único que dirá si Drobe tiene tracción. Todo lo demás es preparación.
