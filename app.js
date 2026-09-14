@@ -87,6 +87,25 @@ const svg = (n,s,w) => {
   return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
 };
 
+/* ═══ EL SÍMBOLO ═══
+   Una D partida en dos: la barra y el arco no se tocan. Ese hueco es la puerta
+   del armario entreabierta. Geometría canónica sobre un viewBox de 120 — es la
+   misma que hay en assets/mark.svg y en los iconos de la app. No la toques sin
+   regenerar también los PNG.
+   Hereda currentColor, así que se tiñe solo según dónde se ponga. */
+const dmark = (s,fill) => {
+  s = s || 24;
+  const c = fill || 'currentColor';
+  return `<svg class="dmark" width="${s}" height="${s}" viewBox="0 0 120 120" aria-hidden="true" focusable="false">`
+    + `<rect x="27" y="20" width="18" height="80" fill="${c}"/>`
+    + `<path d="M 53 20 A 40 40 0 0 1 53 100 Z" fill="${c}"/></svg>`;
+};
+/* Logotipo completo: símbolo + DROBE. `size` es la altura del símbolo en px. */
+const wordmark = (size,cls) => {
+  const s = size || 22;
+  return `<div class="word ${cls||''}" style="--wm:${s}px">${dmark(s)}<span class="word-t">DROBE</span></div>`;
+};
+
 /* ═══════════════════════════════════════════
    CATÁLOGOS
 ═══════════════════════════════════════════ */
@@ -771,7 +790,7 @@ const TABS=[
 function go(r){ if(r!==route)unmountWardrobe3D(); if(r==='add')addMode='choose'; route=r; render(); window.scrollTo(0,0); }
 function render(){
   app.innerHTML=`<div class="shell">
-    <div class="top"><div class="word">Dro<b>be</b></div>
+    <div class="top">${wordmark(21)}
       <div style="display:flex;gap:8px">
         <button class="ico" id="top_social" aria-label="Comunidad" style="position:relative">${svg('people',19)}<span class="unread-dot" id="unread_dot" style="display:none"></span></button>
         <button class="ico" aria-label="Notificaciones">${svg('bell',19)}</button>
@@ -1702,7 +1721,7 @@ Mira en tienda: "${q}"${price?` por ${price}€`:''} en ${storeName||'tienda'}.`
     if(r){
       const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
       const vt={comprar:'✓ Cómpralo',dudoso:'⚠ Piénsalo',evitar:'✗ Déjalo'}[r.veredicto]||'';
-      html+=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Veredicto en tienda<span>${storeName||'tienda'}</span></div>
+      html+=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F6F1E9")}</div><div class="nm">Veredicto en tienda<span>${storeName||'tienda'}</span></div>
         <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div>
         <div class="say" style="margin-top:8px">${r.razon||''}</div>
         ${price&&r.precio_comentario?`<div class="sub" style="margin-top:6px">${r.precio_comentario}</div>`:''}</div>`;
@@ -2125,7 +2144,7 @@ function advice(k){
   if(k==='vender'){const s=store.garments.filter(g=>g.worn<8).sort((a,b)=>cpw(b)-cpw(a)).slice(0,3);return {say:'Por coste por uso y poco uso, estas son las candidatas a vender. Recuperas valor sin tocar lo que usas a diario.',items:s};}
   return defaultAdvice();
 }
-const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Estilista Drobe<span>Solo con tu armario</span></div></div><div class="say">${a.say}</div><div class="outfit">${(a.items||[]).map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/></div><div class="l">${g.brand}</div></div>`).join('')}</div></div>`;
+const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F6F1E9")}</div><div class="nm">Estilista Drobe<span>Solo con tu armario</span></div></div><div class="say">${a.say}</div><div class="outfit">${(a.items||[]).map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/></div><div class="l">${g.brand}</div></div>`).join('')}</div></div>`;
 
 /* ═══════════════════════════════════════════
    ASESOR DE COMPRA
@@ -2246,7 +2265,7 @@ function renderAsesorForm(el,prefill={}){
     if(r){
       const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
       const vt={comprar:'✓ Te conviene',dudoso:'⚠ Piénsalo',evitar:'✗ No lo compres'}[r.veredicto]||'';
-      html+=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Veredicto<span>Basado en tu armario real</span></div><span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div><div class="say" style="margin-top:10px">${r.razon||''}</div>${r.ya_tienes?`<div class="sub" style="margin-top:8px;color:var(--amber)">⚠ Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}<div style="display:flex;gap:16px;margin-top:10px">${r.looks_nuevos!=null?`<div><div style="font-size:18px;font-weight:800">${r.looks_nuevos}</div><div style="font-size:11px;color:var(--ink3)">looks nuevos</div></div>`:''}${r.coste_por_uso_estimado?`<div><div style="font-size:18px;font-weight:800">${r.coste_por_uso_estimado}€</div><div style="font-size:11px;color:var(--ink3)">coste/uso est.</div></div>`:''}</div></div>`;
+      html+=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F6F1E9")}</div><div class="nm">Veredicto<span>Basado en tu armario real</span></div><span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div><div class="say" style="margin-top:10px">${r.razon||''}</div>${r.ya_tienes?`<div class="sub" style="margin-top:8px;color:var(--amber)">⚠ Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}<div style="display:flex;gap:16px;margin-top:10px">${r.looks_nuevos!=null?`<div><div style="font-size:18px;font-weight:800">${r.looks_nuevos}</div><div style="font-size:11px;color:var(--ink3)">looks nuevos</div></div>`:''}${r.coste_por_uso_estimado?`<div><div style="font-size:18px;font-weight:800">${r.coste_por_uso_estimado}€</div><div style="font-size:11px;color:var(--ink3)">coste/uso est.</div></div>`:''}</div></div>`;
     }
     if(offers===null){
       html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Añade <b>SERPAPI_KEY</b> en Vercel para ver precios reales de tiendas.</span></div>`;
@@ -2322,7 +2341,7 @@ async function openSalida(){
     if(!el.isConnected)return;
     if(!r){ out.innerHTML=`<div class="note warn">${svg('spark',16)}<span>No pude generar el kit ahora mismo. Prueba de nuevo.</span></div>`; return; }
     const picks=(r.ids||[]).map(id=>pool.find(g=>g.id===id)).filter(Boolean);
-    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Kit de hoy<span>${sp} · ${wx}</span></div></div>
+    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F6F1E9")}</div><div class="nm">Kit de hoy<span>${sp} · ${wx}</span></div></div>
       <div class="say">${esc(r.consejo||'')}</div>
       ${r.aviso?`<div class="sub" style="margin-top:8px;color:#E8A87C">${esc(r.aviso)}</div>`:''}
       ${picks.length?`<div class="outfit">${picks.map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" src="${g.img||''}"/></div><div class="l">${esc(g.brand)} ${esc(g.name)}</div></div>`).join('')}</div>`:''}
@@ -2432,7 +2451,7 @@ Devuelve SOLO JSON: {"resumen":"1 frase sobre su armario y su estilo","faltas":[
   callAI(sys,usr).then(async r=>{
     const out=el.querySelector('#h_out');
     if(!r||!r.faltas){out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY).</span></div>`;return;}
-    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">D</div><div class="nm">Tu armario<span>Análisis de huecos</span></div></div><div class="say">${r.resumen||''}</div></div>`+
+    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F6F1E9")}</div><div class="nm">Tu armario<span>Análisis de huecos</span></div></div><div class="say">${r.resumen||''}</div></div>`+
       `<div class="shead"><h2>Lo que te cundiría</h2></div>`+
       r.faltas.map(f=>`<div class="gap" data-q="${esc(f.busqueda||f.prenda)}" data-type="${esc(f.prenda)}">
         <div class="gap-main"><div class="gap-t">${f.prenda}</div><div class="gap-m">${f.motivo}</div></div>
@@ -2774,7 +2793,7 @@ function renderWelcome(mode='intro'){
   if(mode==='intro'){
     el.innerHTML=`<div class="welcome">
       <div class="welcome-top">
-        <div class="word" style="font-size:42px">Dro<b>be</b></div>
+        ${wordmark(46,'xl')}
         <div class="welcome-tag">El sistema operativo de tu armario.</div>
       </div>
       <div class="welcome-feats">
@@ -2795,7 +2814,7 @@ function renderWelcome(mode='intro'){
   const isSignup=mode==='signup';
   el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 30px)">
     <div class="backbar"><button id="wb">${svg('back',20)}</button><span class="t">${isSignup?'Crear cuenta':'Iniciar sesión'}</span></div>
-    <div class="word" style="font-size:30px;margin:10px 0 6px">Dro<b>be</b></div>
+    <div style="margin:10px 0 6px">${wordmark(28)}</div>
     <div class="sub" style="margin-bottom:20px">${isSignup?'Tu armario, sincronizado en todos tus dispositivos.':'Entra para recuperar tu armario.'}</div>
     ${!cloud.cloudEnabled()?`<div class="note warn">${svg('spark',18)}<span>Sincronización no disponible. Puedes usar la app en local.</span></div>`:''}
     <div class="field" id="f_em"><label>Email</label><input id="w_em" type="email" inputmode="email" autocomplete="email" autocapitalize="off" placeholder="tu@email.com"/></div>
@@ -3570,7 +3589,7 @@ async function tryPublicView(){
       <div class="door l"><span class="knob"></span></div>
       <div class="door r"><span class="knob"></span></div>
       <div class="doors-light"></div>
-      <div class="doors-logo"><div class="dl-name">Drobe</div><div class="dl-sub">Abriendo el armario</div>
+      <div class="doors-logo"><div class="dl-mark">${dmark(58,'#F6F1E9')}</div><div class="dl-name">DROBE</div><div class="dl-sub">Abriendo el armario</div>
         <div class="dl-dust">${Array.from({length:14},(_,i)=>`<i style="left:${6+i*6.5}%;animation-delay:${(i%7)*0.6}s;animation-duration:${5+(i%5)}s"></i>`).join('')}</div>
       </div>
     </div>

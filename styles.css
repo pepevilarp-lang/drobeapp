@@ -1,16 +1,23 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Fraunces:opsz,wght@9..144,300..700&family=Inter:wght@400;500;600;700;800&display=swap');
 :root{
   --paper:#F6F1E9; --surface:#FFFFFF; --surface-2:#FBF8F2;
   --ink:#16151A; --ink2:#5C5A56; --ink3:#9C968A;
   --hair:#E7DECD; --hair-2:#EFE8D9;
   --accent:#B5471F; --accent-soft:#F3E2D6; --eco:#3F6E52; --amber:#B07A2C; --danger:#A8362B;
-  --noir:#13110F; --noir-2:#1E1B17;
+  --accent-deep:#8E3715; --eco-soft:#E9F1EB;
+  --noir:#13110F; --noir-2:#1E1B17; --noir-3:#2A241E;
   --serif:'Fraunces',Georgia,serif;
-  --s1:0 1px 2px rgba(20,17,14,.06);
-  --s2:0 14px 36px -16px rgba(20,17,14,.28);
-  --s3:0 30px 80px -26px rgba(20,17,14,.4);
+  /* Archivo solo para el logotipo: geométrica y dura, contrasta con la
+     Fraunces editorial de los titulares. El logo firma, los títulos hablan. */
+  --display:'Archivo','Helvetica Neue',Arial,sans-serif;
+  /* sombras en dos capas: un contacto corto y una difusión larga.
+     Tintadas en marrón, no en negro puro — sobre papel cálido se nota. */
+  --s1:0 1px 1.5px rgba(38,28,18,.045), 0 1px 3px rgba(38,28,18,.035);
+  --s2:0 2px 6px -2px rgba(38,28,18,.07), 0 14px 32px -14px rgba(38,28,18,.20);
+  --s3:0 4px 12px -4px rgba(38,28,18,.10), 0 34px 74px -26px rgba(38,28,18,.32);
   --ease:cubic-bezier(.22,1,.36,1);
-  --maxw:480px; --r-s:10px; --r-m:16px; --r-l:24px;
+  --spring:cubic-bezier(.34,1.42,.64,1);
+  --maxw:480px; --r-s:10px; --r-m:16px; --r-l:24px; --r-xl:30px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
 html,body{background:var(--paper);color:var(--ink);
@@ -176,7 +183,8 @@ main{flex:1;padding:0 22px 120px}
 .cpw .ph img{width:100%;height:100%;object-fit:cover;object-position:center top}
 .cpw .nm{font-size:14px;font-weight:600;letter-spacing:-.01em}.cpw .mt{font-size:12px;color:var(--ink3);margin-top:1px}
 .cpw .val{margin-left:auto;text-align:right}.cpw .val .v{font-size:15px;font-weight:700}.cpw .val .s{font-size:11px;color:var(--ink3)}
-.note{background:var(--accent-soft);border-radius:var(--r-m);padding:14px 16px;font-size:13px;color:#1c3f8f;line-height:1.45;display:flex;gap:10px}
+.note{background:var(--accent-soft);border-radius:var(--r-m);padding:14px 16px;font-size:13px;color:var(--accent-deep);line-height:1.45;display:flex;gap:10px}
+.note svg{stroke:var(--accent);flex:none}
 .empty{text-align:center;padding:60px 20px;color:var(--ink3);font-size:14px}
 .spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .field{margin-bottom:12px}.field label{display:block;font-size:11px;font-weight:600;color:var(--ink3);margin-bottom:5px}
@@ -195,10 +203,10 @@ main{flex:1;padding:0 22px 120px}
 .stepper{display:inline-flex;align-items:center;gap:0;border:1px solid var(--hair);border-radius:12px;overflow:hidden;background:var(--surface)}
 .stepper button{width:42px;height:42px;font-size:20px;color:var(--ink)}
 .stepper .val{min-width:54px;text-align:center;font-weight:700;font-size:16px}
-.suitcase{margin:18px 0;border-radius:20px;background:linear-gradient(180deg,#2c313b 0%,#1d212a 100%);padding:14px;box-shadow:var(--s3);position:relative}
+.suitcase{margin:18px 0;border-radius:20px;background:linear-gradient(180deg,var(--noir-3) 0%,var(--noir) 100%);padding:14px;box-shadow:var(--s3);position:relative}
 .suitcase .handle{width:54px;height:8px;border-radius:999px;background:rgba(255,255,255,.25);margin:0 auto 12px}
 .case-body{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;min-height:150px}
-.packtile{aspect-ratio:3/4;border-radius:11px;overflow:hidden;background:#3a3f4a;box-shadow:0 8px 16px -8px rgba(0,0,0,.6);opacity:0;transform:translateY(-28px) rotate(-7deg) scale(.82);animation:pack .55s var(--ease) forwards}
+.packtile{aspect-ratio:3/4;border-radius:11px;overflow:hidden;background:var(--noir-2);box-shadow:0 8px 16px -8px rgba(0,0,0,.55);opacity:0;transform:translateY(-28px) rotate(-7deg) scale(.82);animation:pack .55s var(--ease) forwards}
 .packtile img{width:100%;height:100%;object-fit:cover;object-position:center top}
 @keyframes pack{60%{opacity:1;transform:translateY(4px) rotate(2deg) scale(1.03)}100%{opacity:1;transform:none}}
 .capbar{height:10px;border-radius:999px;background:var(--hair-2);overflow:hidden;margin-top:8px}
@@ -224,7 +232,9 @@ main{flex:1;padding:0 22px 120px}
 .cbadge.low{background:#FCF0EF;color:#9c2a20}
 /* trip / maleta */
 .trip-hero{text-align:center;padding:28px 0 10px;color:var(--ink2)}
-.wx-card{background:linear-gradient(135deg,#1e3a5f 0%,#2c5fd0 100%);color:#fff;border-radius:var(--r-m);padding:16px;margin:12px 0}
+.wx-card{background:linear-gradient(150deg,var(--noir-3) 0%,var(--noir) 100%);color:#F6F1E9;border-radius:var(--r-m);padding:16px;margin:12px 0;box-shadow:var(--s2)}
+.wx-card .wx-t{color:#F6F1E9}
+.wx-card svg{stroke:#E8C9A8}
 .wx-top{display:flex;align-items:center;gap:12px;margin-bottom:8px}
 .wx-t{font-size:17px;font-weight:700}.wx-s{font-size:12px;opacity:.85;margin-top:2px}
 .wx-desc{font-size:14px;line-height:1.5;opacity:.9}
@@ -340,7 +350,7 @@ main{flex:1;padding:0 22px 120px}
 .store-badge{display:inline-flex;align-items:center;gap:6px;background:var(--ink);color:#fff;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:600}
 
 /* escáner tienda: banner de ahorro y mejor oferta */
-.save-banner{background:linear-gradient(135deg,#1a7a4a,#22a05f);color:#fff;border-radius:12px;padding:12px 14px;font-size:14px;display:flex;align-items:center;gap:8px;margin-bottom:10px;line-height:1.35}
+.save-banner{background:var(--eco);color:#F4F9F5;border-radius:12px;padding:12px 14px;font-size:14px;display:flex;align-items:center;gap:8px;margin-bottom:10px;line-height:1.35;box-shadow:var(--s1)}
 .save-banner svg{stroke:#fff;flex:none}
 .offer.best{border:2px solid var(--eco);background:#F2FBF6}
 .offer.best .offer-p{color:var(--eco)}
@@ -762,7 +772,10 @@ input::placeholder{color:var(--ink3);opacity:.75}
 .pt-empty{grid-column:1/-1;text-align:center;padding:36px 16px;color:var(--ink2);font-size:14px;line-height:1.55}
 .pt-empty-t{font-family:var(--serif);font-size:20px;font-style:italic;color:var(--ink);margin-bottom:8px}
 
-.fr-info{position:absolute;bottom:8px;right:8px;width:30px;height:30px;border-radius:999px;background:rgba(250,248,244,.92);color:var(--ink);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+/* Esta regla pisaba .fr-info (la columna de texto de cada fila de amigos) y la
+   convertía en un círculo de 30px en una esquina: la lista se veía rota.
+   El botón flotante que se pretendía definir aquí es .fr-peek. */
+.fr-peek{position:absolute;bottom:8px;right:8px;width:30px;height:30px;border-radius:999px;background:rgba(250,248,244,.92);color:var(--ink);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.18)}
 
 /* puertas: destello, brillo y polvo dorado */
 .doors-light{position:absolute;inset:0;background:radial-gradient(ellipse 30% 100% at 50% 50%,rgba(246,236,214,.95),rgba(246,236,214,0) 70%);opacity:0;transition:opacity 1.1s var(--ease) .25s;pointer-events:none;z-index:1}
@@ -803,3 +816,158 @@ input::placeholder{color:var(--ink3);opacity:.75}
 .dd-mini{width:40px;height:50px;border-radius:8px;overflow:hidden;flex:none;background:var(--surface-2)}
 .dd-mini img{width:100%;height:100%;object-fit:cover}
 .dd-vs{font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--ink3);flex:none}
+
+/* ═══════════════════════════════════════════════════════════════
+   CAPA DE IDENTIDAD Y ACABADO · 2026
+   ───────────────────────────────────────────────────────────────
+   Va al final a propósito: todo lo de arriba sigue siendo la base,
+   esto es la vuelta de tuerca. Dos ideas la gobiernan:
+
+   1. El logotipo es duro y geométrico (Archivo, mayúsculas, apretado);
+      los titulares son suaves y editoriales (Fraunces cursiva). El
+      contraste entre los dos ES el sistema. El logo firma, los
+      titulares hablan.
+   2. El terracota deja de ser decoración y pasa a señalar: lo activo,
+      lo que cambia, lo que reclama atención. Nada más.
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────── LOGOTIPO ─────────── */
+.word{display:inline-flex;align-items:center;gap:calc(var(--wm,21px) * .42);line-height:1}
+.word .dmark{flex:none;display:block;color:var(--ink)}
+.word-t{font-family:var(--display);font-weight:800;
+  font-size:calc(var(--wm,21px) * 1.06);letter-spacing:-.045em;
+  color:var(--ink);line-height:1;padding-top:.04em}
+/* versión grande de la bienvenida: respira más */
+.word.xl{gap:calc(var(--wm) * .34)}
+.word.xl .word-t{font-size:calc(var(--wm) * .98)}
+/* sobre fondo oscuro el logotipo se invierte entero */
+.ficha.b2b .word .dmark,.pub-hero .word .dmark{color:#F6F1E9}
+.ficha.b2b .word-t,.pub-hero .word-t{color:#F6F1E9}
+
+/* ─────────── LA LUZ DEL PAPEL ─────────── */
+/* Un lavado cálido arriba, como luz entrando por una ventana. Cuesta cero
+   y es lo que separa un fondo plano de un fondo que parece un material. */
+.shell{background:
+  radial-gradient(120% 52% at 50% -8%, rgba(255,252,246,.95) 0%, rgba(246,241,233,0) 62%),
+  var(--paper)}
+.shell::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(231,222,205,.9),transparent);pointer-events:none}
+
+/* ─────────── CABECERA ─────────── */
+.top{padding-bottom:10px}
+.top .ico{border:1px solid var(--hair-2);transition:transform .25s var(--ease),box-shadow .25s var(--ease)}
+.top .ico:active{transform:scale(.92)}
+.top .ico:hover{box-shadow:var(--s2)}
+
+/* ─────────── NAVEGACIÓN ─────────── */
+/* La pestaña activa se rellena en terracota suave: el acento por fin dice
+   dónde estás, en vez de limitarse a decorar. */
+.nav-in{background:rgba(252,250,246,.86);border-color:rgba(231,222,205,.85);
+  padding:7px 9px;box-shadow:0 2px 10px -4px rgba(38,28,18,.10),0 18px 40px -18px rgba(38,28,18,.30)}
+.nav-in button{padding:7px 13px;transition:color .3s var(--ease),background .3s var(--ease)}
+.nav-in button.on{color:var(--accent);background:var(--accent-soft)}
+.nav-in button.on svg{transform:translateY(-1px) scale(1.06)}
+.nav-in .lbl{font-size:9.5px;font-weight:700;letter-spacing:.01em}
+.nav-in .add{background:linear-gradient(165deg,var(--noir-3),var(--noir));
+  box-shadow:0 2px 6px -2px rgba(38,28,18,.35),0 10px 22px -8px rgba(38,28,18,.55)}
+.nav-in .add:active{transform:scale(.9)}
+
+/* ─────────── TIPOGRAFÍA ─────────── */
+.title{letter-spacing:-.018em;line-height:1.02}
+.eyebrow{letter-spacing:.18em;font-size:10.5px}
+.sub{font-size:14px;line-height:1.55;color:var(--ink2)}
+.shead{margin:26px 0 12px}
+.shead h2{font-size:20px;letter-spacing:-.015em}
+.shead h2 svg{stroke:var(--accent);vertical-align:-2px;margin-right:5px}
+
+/* ─────────── TARJETAS DEL ARMARIO ─────────── */
+/* Un filo interior de 1px: separa la foto del papel sin dibujar un borde. */
+.grid{gap:18px 16px}
+.gcard .ph{border-radius:18px;box-shadow:var(--s1),inset 0 0 0 1px rgba(38,28,18,.06)}
+.gcard:hover .ph{box-shadow:var(--s2),inset 0 0 0 1px rgba(38,28,18,.06);transform:translateY(-5px)}
+.gcard .cap{padding:11px 3px 0}
+.gcard .b{font-size:15.5px}
+.gcard .n{font-size:12.5px;color:var(--ink2)}
+.gcard .m{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin-top:3px}
+.gcard .tag{backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  background:rgba(246,241,233,.86);letter-spacing:.04em;box-shadow:0 2px 8px rgba(38,28,18,.14)}
+
+/* ─────────── HERO DEL DÍA ─────────── */
+.hero-look{border-radius:var(--r-xl);box-shadow:var(--s3),inset 0 0 0 1px rgba(38,28,18,.08)}
+.hl-b{letter-spacing:.2em;font-size:10px;color:#E8C9A8}
+.hl-n{font-size:25px;line-height:1.14;margin-top:6px}
+
+/* ─────────── BOTONES ─────────── */
+.btn{border-radius:16px;padding:16px;font-size:15.5px;font-weight:650;letter-spacing:-.015em}
+.btn.dark{background:linear-gradient(168deg,var(--noir-3) 0%,var(--noir) 100%);
+  box-shadow:0 2px 6px -2px rgba(38,28,18,.3),0 12px 26px -10px rgba(38,28,18,.5)}
+.btn.dark:active{transform:scale(.98);box-shadow:0 2px 6px -3px rgba(38,28,18,.4)}
+.btn.ghost{border-color:var(--hair);box-shadow:var(--s1)}
+.btn.ghost:active{background:var(--surface-2)}
+.btn.accent{background:linear-gradient(168deg,#C4552A 0%,var(--accent) 100%);
+  box-shadow:0 2px 6px -2px rgba(142,55,21,.35),0 12px 26px -10px rgba(142,55,21,.45)}
+
+/* ─────────── SUPERFICIES ─────────── */
+.opt{border-radius:18px;padding:17px 18px}
+.opt .ring{border-radius:15px;background:linear-gradient(165deg,var(--noir-3),var(--noir))}
+.opt.alt .ring{background:var(--accent-soft)}
+.stat{border-radius:18px}
+.stat .n{letter-spacing:-.035em}
+.pill,.chip{letter-spacing:-.005em}
+.docrow,.offer,.gap,.wl-card,.tk-card,.maleta-card,.burst-row{border-radius:14px}
+
+/* ─────────── MOVIMIENTO ─────────── */
+/* Entrada escalonada: las secciones de una vista no aparecen a la vez, caen
+   una detrás de otra. Es la diferencia entre "se ha pintado" y "ha entrado". */
+.reveal{animation-duration:.62s}
+main>.reveal:nth-of-type(1){animation-delay:.02s}
+main>.reveal:nth-of-type(2){animation-delay:.08s}
+main>.reveal:nth-of-type(3){animation-delay:.14s}
+main>.reveal:nth-of-type(4){animation-delay:.2s}
+main>.reveal:nth-of-type(n+5){animation-delay:.26s}
+.fade{animation-duration:.42s}
+/* los botones responden con un muelle corto, no con una rampa lineal */
+.btn,.opt,.chip,.fr-btn,.gap-btn,.tour-next{transition-timing-function:var(--spring)}
+
+/* ─────────── DETALLES ─────────── */
+.specs{border-radius:18px}
+.viewseg button.on{background:var(--noir)}
+.field input,.field select{border-radius:12px;padding:13px 14px}
+.field label{letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+hr,.hairline{border:none;height:1px;background:var(--hair-2)}
+.empty{line-height:1.6}
+
+/* ─────────── PUERTAS DEL ARMARIO PÚBLICO ─────────── */
+/* El símbolo entra antes que el nombre: primero se ve la D, luego se lee. */
+.dl-mark{opacity:0;animation:dlMark .9s .15s var(--ease) both}
+@keyframes dlMark{from{opacity:0;transform:translateY(10px) scale(.9)}to{opacity:1;transform:none}}
+.dl-name{font-family:var(--display);font-style:normal;font-weight:800;
+  font-size:34px;letter-spacing:-.04em;margin-top:16px}
+@keyframes dlTrack{from{letter-spacing:.24em;opacity:0}to{letter-spacing:-.04em;opacity:1}}
+.dl-sub{margin-top:12px}
+
+/* ─────────── PANTALLA DE BIENVENIDA ─────────── */
+.welcome-top .word{margin-bottom:4px}
+.welcome-tag{font-size:16.5px;color:var(--ink2);line-height:1.45;max-width:19em;margin:12px auto 0}
+.wfeat{gap:15px;font-size:14.5px;line-height:1.4}
+.wfeat svg{stroke:var(--accent)}
+
+/* ─────────── ACCESIBILIDAD DEL ACENTO ─────────── */
+/* El terracota sobre papel da 4.9:1 — pasa AA para texto normal.
+   En texto pequeño usamos la versión oscura, que da 7:1. */
+.offer-why span,.tk-badge.urgent,.msg-look{color:var(--accent-deep)}
+
+/* ─────────── ARREGLOS DE CONTRASTE ─────────── */
+/* El degradado ::after del hero se pintaba ENCIMA del texto (los dos son
+   absolutos y el pseudo-elemento va después en orden de pintado), así que la
+   marca y el nombre del look salían lavados. El texto sube una capa. */
+.hl-text{z-index:2}
+.hero-look::after{z-index:1}
+.ficha-overlay{z-index:2}
+.ficha-hero::after{z-index:1}
+/* Misma trampa en el escáner. */
+.scan-reveal{z-index:2}
+
+/* El avatar del estilista ya no es una letra, es el símbolo. */
+.advisor .who .av{background:var(--accent);padding:0}
+.advisor .who .av .dmark{display:block}
