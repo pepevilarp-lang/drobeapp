@@ -24,8 +24,8 @@ window.addEventListener('error',e=>{
 import * as cloud from './lib/supabase.js';
 import { logError, guard, installGlobalHandlers, onError as onLoggedError, errorLog, clearErrorLog, errorReport } from './lib/log.js';
 import * as taste from './lib/taste.js';
-import { canonPrenda, buscarDuplicados, canonMarca, canonColor, canonTalla,
-         grupoDe, catToGroup, huellaTicket, GRUPOS, COLORES, slug } from './lib/normalize.js';
+import { canonPrenda, buscarDuplicados, canonMarca, canonColor, canonTalla, canonMaterial,
+         canonPatron, grupoDe, catToGroup, huellaTicket, GRUPOS, COLORES, PATRONES, slug } from './lib/normalize.js';
 
 installGlobalHandlers();
 
@@ -704,7 +704,14 @@ const esc = s => (s==null?'':String(s)).replace(/"/g,'&quot;').replace(/</g,'&lt
 const haptic = (ms=10) => { try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} };
 function stars(c,total=5){ const n=Math.round((c||0)*total); return `<span class="stars">${Array.from({length:total},(_,i)=>`<span class="${i<n?'on':'off'}">★</span>`).join('')}</span>`; }
 function confBadge(c){ const p=Math.round((c||0)*100); return `<span class="cbadge ${p<60?'low':p<85?'med':'hi'}">${p}%</span>`; }
-function optSel(opts,val){ return (val&&!opts.includes(val)?`<option selected>${val}</option>`:'')+opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join(''); }
+/* `val` puede venir de la IA o de un ticket, es decir, de fuera. Antes se
+   inyectaba crudo en innerHTML. Ahora se escapa, como manda la regla 7 del
+   CLAUDE.md. */
+function optSel(opts,val){
+  const v=val==null?'':String(val);
+  return (v&&!opts.includes(v)?`<option selected>${esc(v)}</option>`:'')
+    + opts.map(o=>`<option${o===v?' selected':''}>${esc(o)}</option>`).join('');
+}
 
 /* ═══════════════════════════════════════════
    FORMULARIO PRENDA
@@ -723,13 +730,17 @@ function garmentFormHTML(p={},c={},pre='f_'){
     <div class="field"><label>Corte ${c.fit!=null?confBadge(c.fit):''}</label><select id="${pre}fit">${optSel(FITS,p.fit)}</select></div>
   </div>
   <div class="row2">
-    <div class="field"><label>Color ${c.color!=null?confBadge(c.color):''}</label><input id="${pre}color" value="${esc((p.colors&&p.colors[0])||p.color)}" placeholder="Verde oliva"/></div>
-    <div class="field"><label>Material ${c.material!=null?confBadge(c.material):''}</label><input id="${pre}mat" value="${esc(p.material)}" placeholder="Poliéster reciclado"/></div>
+    <!-- Color y material pasan de texto libre a lista cerrada. Escritos a mano
+         se fragmentaban ("Azul marino" / "Marino" / "navy" eran tres colores) y
+         el motor de gustos no podía cruzarlos con los de las tiendas. -->
+    <div class="field"><label>Color ${c.color!=null?confBadge(c.color):''}</label><select id="${pre}color">${optSel(COLORES,canonColor((p.colors&&p.colors[0])||p.color))}</select></div>
+    <div class="field"><label>Material ${c.material!=null?confBadge(c.material):''}</label><select id="${pre}mat">${optSel(MATERIALES_IA,canonMaterial(p.material))}</select></div>
   </div>
   <div class="row2">
-    <div class="field"><label>Talla</label><input id="${pre}size" value="${esc(p.size)}" placeholder="M"/></div>
-    <div class="field"><label>Precio €</label><input id="${pre}price" inputmode="decimal" value="${esc(p.price)}" placeholder="0"/></div>
+    <div class="field"><label>Estampado ${c.pattern!=null?confBadge(c.pattern):''}</label><select id="${pre}pattern">${optSel(PATRONES,canonPatron(p.pattern))}</select></div>
+    <div class="field"><label>Talla</label><input id="${pre}size" value="${esc(p.size)}" placeholder="M" autocapitalize="characters"/></div>
   </div>
+  <div class="field"><label>Precio €</label><input id="${pre}price" inputmode="decimal" value="${esc(p.price)}" placeholder="0"/></div>
   <div class="row2">
     <div class="field"><label>Temporada</label><select id="${pre}season">${optSel(SEASONS,p.season)}</select></div>
     <div class="field"><label>Formalidad</label><select id="${pre}form">${optSel(FORMS,p.formality)}</select></div>
@@ -743,7 +754,7 @@ function garmentFormHTML(p={},c={},pre='f_'){
 function readForm(scope){
   const q=id=>{ const e=scope.querySelector('#'+id); return e?e.value.trim():''; };
   const color=q('f_color');
-  return {brand:q('f_brand'),name:q('f_name')||'Prenda',cat:q('f_cat'),fit:q('f_fit'),color,colors:[color],material:q('f_mat'),size:q('f_size'),price:parseFloat(q('f_price'))||0,season:q('f_season'),formality:q('f_form'),cond:q('f_cond'),store:q('f_store'),context:q('f_ctx')||'calle',sport:q('f_ctx')==='deporte'?q('f_sport'):''};
+  return {brand:q('f_brand'),name:q('f_name')||'Prenda',cat:q('f_cat'),fit:q('f_fit'),color,colors:[color],material:q('f_mat'),pattern:q('f_pattern'),size:q('f_size'),price:parseFloat(q('f_price'))||0,season:q('f_season'),formality:q('f_form'),cond:q('f_cond'),store:q('f_store'),context:q('f_ctx')||'calle',sport:q('f_ctx')==='deporte'?q('f_sport'):''};
 }
 
 /* ═══════════════════════════════════════════
@@ -809,18 +820,38 @@ async function callAI(system,user,image=null){
     return JSON.parse(text);
   }catch(e){ return null; }
 }
-const VISION_SYSTEM=`Eres un experto en moda y catalogador profesional de prendas de una casa de lujo.
+/* El prompt se construye con contexto del usuario: sus marcas y sus tallas.
+   Decirle al modelo "este usuario tiene Stone Island, Silbon y Levi's" sube
+   muchísimo el acierto al leer una etiqueta borrosa, porque deja de adivinar
+   entre todas las marcas del mundo y empieza a reconocer entre las suyas. */
+function marcasConocidas(){
+  try{
+    const P=tasteProfile();
+    const suyas=[...(P.topBrands||[]), ...(store.profile?.likedBrands||[])].map(canonMarca).filter(Boolean);
+    return [...new Set(suyas)].slice(0,12);
+  }catch(e){ return []; }
+}
+function visionSystem(){
+  const m=marcasConocidas();
+  return VISION_BASE + (m.length
+    ? `\n\nMARCAS DE ESTE USUARIO (si la etiqueta encaja con una de estas, es casi seguro esa; escríbela EXACTAMENTE así): ${m.join(', ')}.`
+    : '');
+}
+const MATERIALES_IA=['Algodón','Lino','Lana','Cachemira','Seda','Denim','Punto','Cuero','Ante','Poliéster','Nylon','Gore-Tex','Viscosa','Mezcla'];
+const VISION_BASE=`Eres un experto en moda y catalogador profesional de prendas de una casa de lujo.
 REGLAS CRÍTICAS:
 1. Nunca inventes. Si no puedes determinarlo con seguridad, baja la confianza.
 2. Para 'cat' usa EXACTAMENTE uno de: ${CATS_DETAIL.join(', ')}.
 3. Distingue con rigor: camisa (botones) ≠ camiseta (sin botones); pantalón (largo) ≠ short; jersey (punto) ≠ sudadera (felpa); bomber ≠ blazer ≠ abrigo. Un zapato NUNCA es un pantalón.
 4. 'name': nombre corto y editorial EN ESPAÑOL que un catálogo usaría (ej. "Camisa de lino crudo", "Vaquero recto lavado medio"). Sin marca dentro del nombre.
 5. 'brand': solo si ves logotipo, bordado o etiqueta legible. Si no, "" con confianza 0.
-6. 'color' y 'colors' EN ESPAÑOL (Blanco, Crudo, Negro, Gris, Marino, Azul, Verde, Beige, Marrón, Mostaza, Rojo…). 'material' en español si es identificable por textura (Algodón, Lino, Lana, Denim, Piel, Poliéster…), si no "".
-7. Confianza 0.0–1.0 por campo. Menos de 0.75 = campo incierto.
-8. 'context': "deporte" si es prenda técnica/deportiva (maillot, culotte, mallas running, camiseta técnica, zapatillas de correr, bañador de nadar, neopreno…), si no "calle". Si es deporte, 'sport' es una de: Run, Ciclismo, Natación, Gym, Pádel/Tenis, Fútbol, Outdoor. Marcas como MAAP, Pas Normal Studios, Saysky, Rapha, Castelli, Ciele, Satisfy, Soar, Hoka, On son señal fuerte de deporte.
-9. Responde SOLO JSON válido.
-{"detected":true,"garment_count":1,"cat":"","brand":"","name":"","fit":"","color":"","colors":[],"material":"","season":"","formality":"","context":"calle","sport":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0}}
+6. 'color' es EXACTAMENTE uno de: ${COLORES.join(', ')}. Nada de "azul marino oscuro" ni "off-white": elige el más cercano de la lista. 'colors' son los de la lista que aparezcan, el principal primero.
+7. 'material' es EXACTAMENTE uno de: ${MATERIALES_IA.join(', ')}, solo si la textura lo delata. Si no se ve, "".
+8. 'pattern': "Liso" si es de un color plano, "Estampado" si lleva dibujo, flores, camuflaje o gráfico grande, "Rayas", "Cuadros", "Logo" si el logotipo es el protagonista. Ante la duda, "Liso".
+9. Confianza 0.0–1.0 por campo. Menos de 0.75 = campo incierto. SÉ HONESTO: una confianza inflada es peor que una baja, porque la app deja de preguntar.
+10. 'context': "deporte" si es prenda técnica/deportiva (maillot, culotte, mallas running, camiseta técnica, zapatillas de correr, bañador de nadar, neopreno…), si no "calle". Si es deporte, 'sport' es una de: Run, Ciclismo, Natación, Gym, Pádel/Tenis, Fútbol, Outdoor. Marcas como MAAP, Pas Normal Studios, Saysky, Rapha, Castelli, Ciele, Satisfy, Soar, Hoka, On son señal fuerte de deporte.
+11. Responde SOLO JSON válido.
+{"detected":true,"garment_count":1,"cat":"","brand":"","name":"","fit":"","color":"","colors":[],"material":"","pattern":"Liso","season":"","formality":"","context":"calle","sport":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0,"pattern":0}}
 IMPORTANTE: si en la foto hay VARIAS prendas distintas (armario abierto, ropa sobre la cama, varias perchas), pon garment_count con el total real y añade "items": un array con un objeto por prenda (mismos campos: cat, brand, name, fit, color, material, season, formality, context, sport). Máximo 6. Solo prendas que se vean con claridad.`;
 
 const EMAIL_SYSTEM=`Eres un extractor de precisión de emails de confirmación de compra de moda (Zara, Mango, ASOS, Zalando, El Corte Inglés, Nike…).
@@ -896,6 +927,28 @@ function render(){
    ARMARIO
 ═══════════════════════════════════════════ */
 function vArmario(m){
+  /* PRIMER MINUTO. Con el armario vacío la pantalla enseñaba un titular
+     ("Hoy te queda bien lo sencillo") sobre la nada, sin foto, sin prendas y
+     sin decirte qué hacer. Ahora hay un arranque de verdad: qué es esto, qué
+     gano, y un solo botón. */
+  const total=store.garments.length;
+  if(total===0){
+    m.innerHTML=`<div class="reveal first-run">
+      <div class="fr-mark">${dmark(54)}</div>
+      <div class="title" style="font-size:34px;margin-top:20px">Tu armario<br>está vacío</div>
+      <div class="sub" style="max-width:22em">Añade unas cuantas prendas y Drobe empieza a entender cómo vistes: tus marcas, tus colores, lo que pagas por cada cosa.</div>
+      <div class="fr-steps">
+        ${[['cam','Haz una foto','La IA rellena marca, tipo, color y material'],
+           ['receipt','Escanea un ticket','Varias prendas de golpe, con su precio real'],
+           ['pen','Añádela a mano','Si prefieres control total']]
+          .map(([i,t,d])=>`<div class="fr-step"><span class="fr-ico">${svg(i,19)}</span><div><div class="fr-t">${t}</div><div class="fr-d">${d}</div></div></div>`).join('')}
+      </div>
+      <button class="btn dark" id="fr_go" style="margin-top:22px">${svg('add',18,2)} Añadir mi primera prenda</button>
+      <div class="fr-note">Con diez prendas ya acierta. Con treinta, afina de verdad.</div>
+    </div>`;
+    m.querySelector('#fr_go').onclick=()=>go('add');
+    return;
+  }
   const look=pickOutfit();
   m.innerHTML=`<div class="reveal">
     <div class="eyebrow">${WEATHER.city}${WEATHER.temp!=null?` · ${WEATHER.temp}°`:''}</div>
@@ -949,7 +1002,15 @@ function vArmario(m){
       ?list.map((g,i)=>`<div class="gcard reveal" data-g="${g.id}" style="animation-delay:${Math.min(i,10)*0.04}s">
         <div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}${kmBadge(g)}</div>
         <div class="cap"><div class="b">${g.brand}</div><div class="n">${g.name}</div><div class="m">${wardContext==='deporte'&&g.sport?g.sport+' · ':''}${g.cat} · ${g.color}</div></div></div>`).join('')
-      :`<div class="ward-empty">${svg('search',22)}<div>${wardQuery?`Nada que encaje con «${esc(wardQuery)}»`:wardContext==='deporte'?'Aún no tienes prendas deportivas.<br>Al escanear un maillot o unas zapatillas, Drobe las clasifica solo.':'Nada por aquí.'}</div></div>`;
+      :`<div class="ward-empty">${svg('search',22)}<div>${
+          wardQuery
+            ? `Nada que encaje con «${esc(wardQuery)}»<br><span class="we-hint">Prueba con la marca, el color o el tipo de prenda.</span>`
+            : wardContext==='deporte'
+              ? 'Aún no tienes prendas deportivas.<br><span class="we-hint">Al escanear un maillot o unas zapatillas, Drobe las clasifica solas.</span>'
+              : gridFilter && gridFilter!=='Todo'
+                ? `No tienes nada en «${esc(gridFilter)}».<br><span class="we-hint">Toca «Todo» para ver el armario entero.</span>`
+                : 'Nada por aquí.'
+        }</div></div>`;
     ward.innerHTML=`
       <div class="viewseg ctxseg" style="margin-top:16px">
         <button class="vseg ${wardContext==='calle'?'on':''}" data-ctx="calle">${svg('hanger',15)} Calle</button>
@@ -1287,15 +1348,15 @@ async function handleBurst(m,e){
     try{
       const img=await imageToBase64(files[i],1152,0.85);
       row.querySelector('.br-ph').outerHTML=`<div class="br-ph"><img src="${img.dataUrl}"/></div>`;
-      let r=await callAI(VISION_SYSTEM,'Analiza esta prenda con máxima precisión.',img);
-      if(!r) r=await callAI(VISION_SYSTEM,'Analiza esta prenda con máxima precisión.',img);
+      let r=await callAI(visionSystem(),'Analiza esta prenda con máxima precisión.',img);
+      if(!r) r=await callAI(visionSystem(),'Analiza esta prenda con máxima precisión.',img);
       if(cancelled)return;
       if(r&&r.detected){
         if(r.cat)r.cat=normalizeCat(r.cat);
         const c=r.confidence||{};
         const low=Object.values(c).some(v=>v<0.75);
         const gid='g'+Date.now()+Math.random().toString(36).slice(2,6);
-        addGarment({id:gid,brand:r.brand||'—',name:r.name||r.cat||'Prenda',cat:r.cat||'Otro',catGroup:catToGroup(r.cat||''),
+        addGarment({id:gid,brand:r.brand||'',name:r.name||r.cat||'Prenda',cat:r.cat||'',pattern:r.pattern||'',conf:r.confidence||null,
           fit:r.fit||'Regular Fit',color:r.color||'—',colors:(r.colors&&r.colors.length?r.colors:[r.color||'—']),
           material:r.material||'',size:'',season:r.season||'Todo el año',formality:r.formality||'Casual',
           context:r.context==='deporte'?'deporte':'calle',sport:r.context==='deporte'?(r.sport||''):'',
@@ -1387,7 +1448,7 @@ async function runPipeline(m,img,kind){
 
   // llamada a la IA con un reintento automático si falla
   const usr=kind==='ticket'?'Extrae todas las prendas de este ticket de compra.':'Analiza esta prenda con máxima precisión.';
-  const sys=kind==='ticket'?TICKET_SYSTEM:VISION_SYSTEM;
+  const sys=kind==='ticket'?TICKET_SYSTEM:visionSystem();
   let result=await callAI(sys,usr,img);
   if(!result) result=await callAI(sys,usr,img);
 
@@ -1592,7 +1653,8 @@ function showTicket(m,r,img){
 function readFormPrefixed(scope,pre){
   const q=id=>{ const e=scope.querySelector('#'+pre+id); return e?e.value.trim():''; };
   return {brand:q('brand'),name:q('name'),cat:q('cat'),fit:q('fit'),color:q('color'),material:q('mat'),
-    size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond'),context:q('ctx')||'calle',sport:q('ctx')==='deporte'?q('sport'):''};
+    pattern:q('pattern'),size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond'),
+    context:q('ctx')||'calle',sport:q('ctx')==='deporte'?q('sport'):''};
 }
 
 function saveWishlistItem(w){
@@ -1763,7 +1825,7 @@ function openScannerTienda(){
     out.querySelector('svg')?.classList.add('spin');
     try{
       const img=await imageToBase64(f);
-      const r=await callAI(VISION_SYSTEM,'Identifica esta prenda con máxima precisión para buscarla en tiendas.',img);
+      const r=await callAI(visionSystem(),'Identifica esta prenda con máxima precisión para buscarla en tiendas.',img);
       if(r){
         if(r.brand)el.querySelector('#sc_brand').value=r.brand;
         const desc=[r.cat,r.color,r.material].filter(Boolean).join(' ');

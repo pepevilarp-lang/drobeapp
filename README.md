@@ -23,8 +23,10 @@ sw.js                   service worker (offline)
 manifest.webmanifest    PWA
 
 lib/log.js              registro de errores  ← todo fallo pasa por aquí
+lib/normalize.js        normalización        ← marcas, categorías, colores, duplicados
+lib/normalize.test.mjs  88 pruebas
 lib/taste.js            motor de gustos      ← puntuación de recomendaciones
-lib/taste.test.mjs      pruebas del motor (node lib/taste.test.mjs)
+lib/taste.test.mjs      47 pruebas
 lib/supabase.js         cliente de la nube: auth, sync, social, storage
 
 api/ai.js               proxy a Groq (texto y visión)
@@ -53,7 +55,8 @@ cae a un parser heurístico si `/api/ai` no responde.
 Pruebas del motor de recomendación (sin dependencias, tarda menos de un segundo):
 
 ```bash
-node lib/taste.test.mjs
+node lib/normalize.test.mjs   # 88 pruebas
+node lib/taste.test.mjs       # 47 pruebas
 ```
 
 ---
@@ -123,6 +126,12 @@ ha hecho de verdad.
   cosas por caras, el techo de precio baja.
 - **Confianza.** Con cuatro prendas no se puede afirmar nada, así que el motor
   baja el umbral y lo dice, en vez de enseñar una pantalla vacía.
+- **Normalización.** Todo pasa por `lib/normalize.js`: marca, categoría, color,
+  material, talla y tienda tienen una sola forma canónica. Sin esto, la misma
+  marca escrita de dos maneras se repartía la afinidad y la marca favorita del
+  usuario desaparecía de sus propias recomendaciones.
+- **Duplicados.** Al añadir una prenda se busca si ya hay algo igual y se avisa
+  antes de guardar, con la prenda parecida delante.
 
 Cada recomendación sale con su puntuación y sus motivos, visibles en la propia
 tarjeta. No es decoración: si Drobe falla la puntería, se ve por qué.
@@ -145,7 +154,8 @@ se ignora con un comentario que explique por qué.
 
 - `app.js` sigue siendo un monolito de ~3.600 líneas. Trocearlo en `views/`,
   `core/` y `features/` es la mejora que más acelera todo lo demás.
-- No hay pruebas más allá de `lib/taste.test.mjs`.
+- 135 pruebas automáticas cubren normalización y motor de gustos, pero las
+  vistas de `app.js` no tienen pruebas propias.
 - La versión de caché del service worker se sube a mano.
 - SerpApi: 100 búsquedas/mes en el plan gratuito. `search_cache` (24 h,
   compartida entre usuarios) estira la cuota pero no elimina el techo.

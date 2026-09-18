@@ -23,25 +23,36 @@ bundler.** Lo que se escribe es lo que se sirve. Eso condiciona todo:
 
 ## Reglas del proyecto
 
-1. **Nada de `catch` vacíos.** Todo fallo va por `logError()` de `lib/log.js`.
+1. **La normalización es obligatoria.** Marca, categoría, color, material,
+   talla y tienda SIEMPRE pasan por `lib/normalize.js` antes de guardarse.
+   `canonPrenda()` se aplica en `addGarment()` y al editar, así que las seis
+   vías de alta acaban en la misma forma. No añadas una séptima que se la
+   salte. Motivo: "Stone Island", "stone island" y "STONE ISLAND" eran tres
+   marcas distintas y el motor repartía la afinidad entre ellas, hundiendo la
+   marca favorita del usuario por debajo del umbral de recomendación.
+2. **Un solo vocabulario de categorías.** Los nueve grupos viven en
+   `GRUPOS` de `lib/normalize.js` y los usan app.js y lib/taste.js. Antes había
+   dos listas con los nombres transpuestos ("Chaquetas/Abrigos" contra
+   "Abrigos/Chaquetas") y los abrigos nunca tuvieron banda de precio.
+3. **Nada de `catch` vacíos.** Todo fallo va por `logError()` de `lib/log.js`.
    Si algo es realmente ignorable, se ignora con un comentario que lo justifique.
    El motivo: antes 31 de 46 `catch` se tragaban el error en silencio y `app.js`
    no tenía ni un `console`. Era imposible saber por qué fallaba nada.
-2. **El motor de gustos no inventa.** Cada señal de `lib/taste.js` viene de algo
+4. **El motor de gustos no inventa.** Cada señal de `lib/taste.js` viene de algo
    que el usuario ha hecho: comprar, ponerse, vender, guardar, rechazar. Si no
    hay datos, baja `confidence` y se dice; no se rellena con supuestos.
-3. **`lib/taste.js` es puro.** No toca DOM ni red. Recibe `store`, devuelve
-   objetos. Si lo cambias, ejecuta `node lib/taste.test.mjs` — 31 pruebas, cero
-   dependencias.
-4. **El esquema real vive en `supabase/schema.sql`.** Si cambias tablas desde el
+5. **`lib/taste.js` es puro.** No toca DOM ni red. Recibe `store`, devuelve
+   objetos. Si lo cambias, ejecuta `node lib/taste.test.mjs` (47 pruebas) y
+   `node lib/normalize.test.mjs` (88). Cero dependencias, menos de un segundo.
+6. **El esquema real vive en `supabase/schema.sql`.** Si cambias tablas desde el
    panel de Supabase, actualiza el fichero en el mismo commit. Cuando dejaron de
    coincidir, las escrituras fallaban en silencio (Supabase no devuelve error
    cuando RLS bloquea un update: borra cero filas y calla).
-5. **`schema.sql` nunca borra.** Todo es `if not exists` / `add column if not
+7. **`schema.sql` nunca borra.** Todo es `if not exists` / `add column if not
    exists`, y se puede ejecutar sobre producción. No vuelvas a meter `DROP TABLE`.
-6. **Sube `CACHE` en `sw.js`** en cada despliegue que toque `app.js`,
+8. **Sube `CACHE` en `sw.js`** en cada despliegue que toque `app.js`,
    `styles.css` o `lib/`. Si no, iOS sirve la versión anterior.
-7. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
+9. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
    usuario o de la red.
 
 ## Arquitectura de datos
@@ -53,8 +64,8 @@ por encima. La app funciona entera sin sesión.
 - `syncFromCloud()` fusiona nube y local, con *tombstones* (`store.deletedIds`)
   para que una prenda borrada no resucite desde otro dispositivo.
 - El borrado es **suave**: se marca `deleted_at`, no se borra la fila.
-- `alignStoreToAccount()` vacía el local si entra otra cuenta. Los datos de un
-  usuario no se mezclan jamás con los de otro.
+- `alignStoreToAccount()` decide entre adoptar y borrar según el `ownerId`; ver
+  «Identidad y aislamiento» más abajo.
 
 ## Mapa de `app.js`
 
@@ -67,6 +78,23 @@ Perfil → Onboarding y tour → Demo B2B → Red social → Strava → arranque
 Trocearlo es la deuda técnica número uno, pero hazlo por partes y con la app
 funcionando entre paso y paso.
 
+## Identidad y aislamiento
+
+Requisito duro: **los datos de una persona no se mezclan JAMÁS con los de otra.**
+Lo que lo garantiza:
+
+- `alignStoreToAccount()` corre de forma SÍNCRONA antes de cualquier llamada de
+  red, así que la demo nunca se sube a una cuenta nueva.
+- Distingue dos casos: si nadie había reclamado el almacenamiento local
+  (`ownerId` ausente), las prendas las **adopta** quien entra — es alguien que
+  estuvo probando sin cuenta. Si el `ownerId` es de OTRA persona, se borra todo,
+  incluidas las seis claves sueltas de `localStorage` (`CLAVES_POR_USUARIO`).
+- `lib/supabase.js` mantiene `_uid` y toda escritura captura ese uid de forma
+  síncrona al entrar y lo verifica con `authFor()` antes de tocar la base. Sin
+  esto, una escritura encolada con la cuenta A que resolvía después de un cambio
+  de cuenta se grababa con el `user_id` de B.
+- `_profileEnsured` y `_socialEnsured` se resetean en `setUid()`.
+
 ## Cosas que ya pasaron (no las repitas)
 
 - `strava.js` estaba en la raíz en vez de en `api/`, así que `/api/strava` daba
@@ -77,6 +105,16 @@ funcionando entre paso y paso.
 - `api/health.js` publicaba el prefijo de la clave de Groq. Borrado.
 - Las políticas RLS de `garments` eran solo-dueño, así que «ver el armario de un
   amigo» y el armario público por `?u=usuario` devolvían siempre vacío, sin error.
+- **Agujero de autorización**: `friendship create` comprobaba quién era el
+  solicitante pero no el ESTADO, así que cualquiera podía insertar una amistad
+  ya aceptada contra sí mismo y leer el armario entero de cualquier usuario. Y
+  `social readable using (true)` dejaba enumerar los uuid de todo el mundo sin
+  sesión. Si tocas políticas, piensa siempre en qué puede escribir un cliente
+  malicioso con la anon key, que es pública.
+- `fromRow` declaraba la clave `photos` dos veces en el mismo objeto literal y
+  ganaba la segunda (`[]`): las fotos se subían y se borraban en cada sync.
+- `readForm` no devuelve `catGroup`, así que `Object.assign(g, readForm(el))`
+  dejaba el grupo desincronizado. Por eso la edición pasa por `canonPrenda`.
 
 ## Flujo de trabajo
 
