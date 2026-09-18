@@ -34,25 +34,38 @@ bundler.** Lo que se escribe es lo que se sirve. Eso condiciona todo:
    `GRUPOS` de `lib/normalize.js` y los usan app.js y lib/taste.js. Antes había
    dos listas con los nombres transpuestos ("Chaquetas/Abrigos" contra
    "Abrigos/Chaquetas") y los abrigos nunca tuvieron banda de precio.
-3. **Nada de `catch` vacíos.** Todo fallo va por `logError()` de `lib/log.js`.
+   Los **tipos** concretos viven en `CATALOGO`, con su grupo escrito al lado:
+   el grupo es un dato, no una deducción. Si añades un tipo, va ahí, y sus
+   sinónimos y traducciones en `CAT_SINONIMOS`. No hagas una lista nueva:
+   el formulario de alta, el de edición, el asesor de compra y los prompts de
+   la IA leen todos de esta. Llegó a haber cuatro entradas para la misma
+   zapatilla ("Sneakers", "Bambas", "Zapatillas deportivas", "Running") y la
+   misma prenda acababa archivada de tres maneras.
+3. **El formulario solo pregunta lo que aplica.** `camposPrenda(cat)` decide
+   qué campos se pintan y `canonPrenda()` lo hace cumplir al guardar. A unas
+   zapatillas no se les pregunta el corte ni el estampado; a un reloj tampoco
+   la talla ni la temporada. Un campo que no aplica no es inofensivo: se
+   rellena igual, y un dato mal rellenado envenena el motor de gustos. Si
+   añades un campo, decide en `camposPrenda` dónde tiene sentido.
+4. **Nada de `catch` vacíos.** Todo fallo va por `logError()` de `lib/log.js`.
    Si algo es realmente ignorable, se ignora con un comentario que lo justifique.
    El motivo: antes 31 de 46 `catch` se tragaban el error en silencio y `app.js`
    no tenía ni un `console`. Era imposible saber por qué fallaba nada.
-4. **El motor de gustos no inventa.** Cada señal de `lib/taste.js` viene de algo
+5. **El motor de gustos no inventa.** Cada señal de `lib/taste.js` viene de algo
    que el usuario ha hecho: comprar, ponerse, vender, guardar, rechazar. Si no
    hay datos, baja `confidence` y se dice; no se rellena con supuestos.
-5. **`lib/taste.js` es puro.** No toca DOM ni red. Recibe `store`, devuelve
+6. **`lib/taste.js` es puro.** No toca DOM ni red. Recibe `store`, devuelve
    objetos. Si lo cambias, ejecuta `node lib/taste.test.mjs` (47 pruebas) y
-   `node lib/normalize.test.mjs` (88). Cero dependencias, menos de un segundo.
-6. **El esquema real vive en `supabase/schema.sql`.** Si cambias tablas desde el
+   `node lib/normalize.test.mjs` (213). Cero dependencias, menos de un segundo.
+7. **El esquema real vive en `supabase/schema.sql`.** Si cambias tablas desde el
    panel de Supabase, actualiza el fichero en el mismo commit. Cuando dejaron de
    coincidir, las escrituras fallaban en silencio (Supabase no devuelve error
    cuando RLS bloquea un update: borra cero filas y calla).
-7. **`schema.sql` nunca borra.** Todo es `if not exists` / `add column if not
+8. **`schema.sql` nunca borra.** Todo es `if not exists` / `add column if not
    exists`, y se puede ejecutar sobre producción. No vuelvas a meter `DROP TABLE`.
-8. **Sube `CACHE` en `sw.js`** en cada despliegue que toque `app.js`,
+9. **Sube `CACHE` en `sw.js`** en cada despliegue que toque `app.js`,
    `styles.css` o `lib/`. Si no, iOS sirve la versión anterior.
-9. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
+10. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
    usuario o de la red.
 
 ## Arquitectura de datos
@@ -115,6 +128,17 @@ Lo que lo garantiza:
   ganaba la segunda (`[]`): las fotos se subían y se borraban en cada sync.
 - `readForm` no devuelve `catGroup`, así que `Object.assign(g, readForm(el))`
   dejaba el grupo desincronizado. Por eso la edición pasa por `canonPrenda`.
+- El contenedor del formulario se llamaba `${pre}form`, que con `pre='f_'` es
+  exactamente el id del select de Formalidad (`f_form`). `querySelector`
+  devolvía el div y leer `.value` reventaba el guardado entero. Ahora es
+  `${pre}gform`. Cuidado al inventar ids con prefijo.
+- El alta por ticket y la bajada de la nube construían la prenda a mano en vez
+  de pasar por `canonPrenda`: metían el literal "—" como marca y como color, y
+  forzaban `fit: 'Regular Fit'` a TODO, también al calzado. Eran la séptima y
+  la octava vía de alta saltándose la puerta. Ya no.
+- La marca llegaba de la IA como la leía: "AUTRY MEDALIST" es el modelo, no la
+  marca, y para el motor de gustos era una marca distinta de "Autry". Todo lo
+  que devuelve visión pasa ahora por `depurarVision()`.
 
 ## Flujo de trabajo
 

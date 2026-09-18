@@ -998,3 +998,24 @@ hr,.hairline{border:none;height:1px;background:var(--hair-2)}
 .fr-d{font-size:12.5px;color:var(--ink2);margin-top:2px;line-height:1.4}
 .fr-note{font-size:12.5px;color:var(--ink3);margin-top:14px;text-align:center;width:100%}
 .we-hint{display:inline-block;margin-top:6px;font-size:12.5px;color:var(--ink3)}
+
+/* ═══ FORMULARIO DE PRENDA ADAPTATIVO ═══
+   El formulario ya no pinta siempre los mismos campos: en unas zapatillas
+   desaparecen Corte y Estampado, en un reloj también la talla y la temporada.
+   Eso obliga a dos cosas — que una fila con un solo campo ocupe todo el ancho
+   en vez de dejar medio hueco, y que la aparición o desaparición de un campo
+   no dé un salto seco. */
+.gform .row2:has(> .field:only-child){grid-template-columns:1fr}
+.gform .field{animation:campoEntra .22s var(--ease) both}
+@keyframes campoEntra{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.gform .field{animation:none}}
+
+/* La unidad de la talla ("Número europeo", "Centímetros") junto a la etiqueta:
+   sin esto, un usuario pone "42" en una camisa y "L" en unas zapatillas. */
+.hint-i{font-weight:500;text-transform:none;letter-spacing:0;color:var(--ink3);opacity:.7}
+.hint-i::before{content:'· '}
+
+/* El desplegable de tipos va agrupado por familia: con 74 tipos, los
+   encabezados son la diferencia entre buscar y encontrar. */
+.gform select optgroup{font-weight:700;color:var(--ink3)}
+.gform select option{font-weight:400;color:var(--ink)}
