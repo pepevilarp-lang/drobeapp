@@ -24,6 +24,8 @@ window.addEventListener('error',e=>{
 import * as cloud from './lib/supabase.js';
 import { logError, guard, installGlobalHandlers, onError as onLoggedError, errorLog, clearErrorLog, errorReport } from './lib/log.js';
 import * as taste from './lib/taste.js';
+import { canonPrenda, buscarDuplicados, canonMarca, canonColor, canonTalla,
+         grupoDe, catToGroup, huellaTicket, GRUPOS, COLORES, slug } from './lib/normalize.js';
 
 installGlobalHandlers();
 
@@ -177,7 +179,12 @@ function showSyncWarning(reason){
 const findG = id => store.garments.find(g=>g.id==id);
 function addGarment(g){
   haptic(12);
+  // Canonizar en la PUERTA: las seis vías de alta (foto, varias prendas, ráfaga,
+  // ticket, email y manual) rellenaban los campos de seis maneras distintas —
+  // unas con '', otras con '—', otras sin el campo. A partir de aquí, una sola.
+  g = canonPrenda(g);
   g.id=g.id||('g'+Date.now()+Math.random().toString(36).slice(2,6));
+  g.addedAt=g.addedAt||new Date().toISOString();
   store.garments.unshift(g); save();
   if(session){
     cloud.pushGarment(g)
@@ -185,6 +192,43 @@ function addGarment(g){
       .catch(e=>showSyncWarning(e&&e.message));
   } else showSyncWarning('no_session');
 }
+/* ═══ ¿YA TIENES ESTO? ═══
+   No había ninguna detección de duplicados en ninguna vía de alta: fotografiar
+   dos veces la misma camiseta, o escanear dos veces el mismo ticket, creaba
+   copias que luego contaban doble en la saturación, en las bandas de precio y
+   en la afinidad de marca. Esto avisa ANTES de guardar, y deja decidir. */
+function avisarSiDuplicado(g){
+  return new Promise(resolve=>{
+    let dups=[];
+    try{ dups=buscarDuplicados(g, store.garments).slice(0,3); }
+    catch(e){ logError('buscarDuplicados', e); }
+    if(!dups.length) return resolve(true);
+    const d=dups[0];
+    const ov=document.createElement('div'); ov.className='sheet-ov';
+    ov.innerHTML=`<div class="sheet">
+      <div class="sheet-bar"></div>
+      <div class="sheet-t">¿No la tienes ya?</div>
+      <div class="sub" style="margin:-6px 0 14px">${d.score===1?'Esto es idéntico a algo que ya está en tu armario.':'Se parece mucho a algo que ya tienes.'}</div>
+      ${dups.map(x=>`<div class="dup-row">
+        <div class="dup-ph">${x.garment.img?`<img src="${esc(x.garment.img)}"/>`:svg('shirt',20)}</div>
+        <div class="dup-info">
+          <div class="dup-n">${esc([x.garment.brand,x.garment.name].filter(Boolean).join(' · ')||x.garment.cat||'Prenda')}</div>
+          <div class="dup-m">${esc([x.garment.color,x.garment.size&&('talla '+x.garment.size)].filter(Boolean).join(' · '))}${x.motivo?' — '+esc(x.motivo):''}</div>
+        </div>
+        <div class="dup-pct">${Math.round(x.score*100)}%</div>
+      </div>`).join('')}
+      <button class="btn dark" id="dup_no" style="margin-top:16px">No añadirla</button>
+      <button class="btn ghost" id="dup_si" style="margin-top:8px">Añadir igualmente</button>
+    </div>`;
+    document.body.appendChild(ov);
+    requestAnimationFrame(()=>ov.classList.add('show'));
+    const cerrar=v=>{ ov.classList.remove('show'); setTimeout(()=>ov.remove(),300); resolve(v); };
+    ov.querySelector('#dup_si').onclick=()=>cerrar(true);
+    ov.querySelector('#dup_no').onclick=()=>cerrar(false);
+    ov.onclick=e=>{ if(e.target===ov) cerrar(false); };
+  });
+}
+
 /* ═══ MOTOR DE GUSTOS ═══
    La lógica vive en lib/taste.js (módulo puro, con pruebas en lib/taste.test.mjs).
    Aquí solo queda el pegamento: memoización y la firma que ya usaba la app.
@@ -286,7 +330,7 @@ function showMultiPrenda(m,r,img){
     haptic(12);
     items.forEach((it,i)=>{
       const d=readFormPrefixed(stage,'mp'+i+'_');
-      addGarment({...d,price:parseFloat(d.price)||0,colors:[d.color],catGroup:catToGroup(d.cat),bought:'Hoy',worn:0,lastWorn:'—',status:'uso',img:img?.dataUrl||'',photos:[],docs:[],tags:[]});
+      addGarment({...d,price:parseFloat(d.price)||0,colors:[d.color],bought:'Hoy',worn:0,lastWorn:'—',status:'uso',img:img?.dataUrl||'',photos:[],docs:[],tags:[]});
     });
     celebrateAdd(img?.dataUrl,items.length+' prendas añadidas').then(()=>{ addMode='choose'; go('armario'); });
   };
@@ -504,7 +548,28 @@ function celebrateAdd(imgSrc,label){
     setTimeout(()=>{ ov.classList.add('out'); setTimeout(()=>{ ov.remove(); res(); },400); },1100);
   });
 }
-const cpw = g => g.price/Math.max(g.worn,1);
+// Sin coercionar, una prenda sin precio daba `undefined/1` = NaN y la ficha
+// enseñaba literalmente "NaN €/uso". lib/taste.js ya lo hacía bien; ahora coinciden.
+const cpw = g => (+g.price||0)/Math.max(+g.worn||0,1);
+
+/* "Última vez" en lenguaje natural, calculada AL PINTAR a partir de la fecha
+   real. Antes se guardaba el texto "Hoy" en el momento de marcar el uso y ya no
+   cambiaba nunca: la ficha decía "Última vez: Hoy" medio año después. */
+function fmtDesde(iso){
+  if(!iso) return '—';
+  const t=Date.parse(iso); if(isNaN(t)) return String(iso);
+  const dias=Math.floor((Date.now()-t)/86400000);
+  if(dias<=0) return 'Hoy';
+  if(dias===1) return 'Ayer';
+  if(dias<7)  return `Hace ${dias} días`;
+  if(dias<14) return 'Hace 1 semana';
+  if(dias<31) return `Hace ${Math.floor(dias/7)} semanas`;
+  if(dias<61) return 'Hace 1 mes';
+  if(dias<365)return `Hace ${Math.round(dias/30)} meses`;
+  const a=Math.floor(dias/365); return a===1?'Hace más de un año':`Hace ${a} años`;
+}
+/* Texto a mostrar: la fecha real manda; el texto libre antiguo solo como reserva. */
+const ultimaVez = g => g.lastWornAt ? fmtDesde(g.lastWornAt) : (g.lastWorn||'—');
 
 /* ═══════════════════════════════════════════
    ADN DE ESTILO (motor B2B)
@@ -618,8 +683,11 @@ function computeDrobeScore(){
    Se envían solo con el consentimiento «Mejorar Drobe con mis datos». */
 function trackScanEvent(data){
   if(!store.profile?.consent_analytics) return;
-  const events=JSON.parse(localStorage.getItem('drobe.scan_events')||'[]');
-  events.push({...data, ts: new Date().toISOString()});
+  // se guarda junto al uid dueño: si el fichero sobrevive a un cambio de
+  // cuenta, al leerlo se descarta lo que no sea de quien está dentro
+  const dueno=session?.user?.id||null;
+  const events=JSON.parse(localStorage.getItem('drobe.scan_events')||'[]').filter(e=>e.uid===dueno);
+  events.push({...data, uid:dueno, ts: new Date().toISOString()});
   localStorage.setItem('drobe.scan_events', JSON.stringify(events.slice(-100)));
   if(session) cloud.trackEvent('scan', data).catch(e=>logError('trackEvent.scan', e));
 }
@@ -944,7 +1012,7 @@ function renderFicha(){
         ${spec('Talla',g.size||'—')}${spec('Estado',g.cond)}
         ${spec('Comprada',g.bought)}${spec('Tienda',g.store||'—')}
         ${spec('Precio',(g.price||0).toFixed(2)+' €')}${spec('Veces usada',String(g.worn))}
-        ${spec('Última vez',g.lastWorn||'—')}${spec('Coste/uso',cpw(g).toFixed(2)+' €',true)}
+        ${spec('Última vez',ultimaVez(g))}${spec('Coste/uso',cpw(g).toFixed(2)+' €',true)}
       </div>
       <div class="shead"><h2>Combina con</h2></div>
       <div class="compat">${compatList(g).map(c=>`<div class="it" data-c="${c.g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${c.g.img||''}"/></div><div class="pct">${c.pct}%</div></div>`).join('')}</div>
@@ -1007,7 +1075,16 @@ function renderFicha(){
     if(session)cloud.deleteGarmentCloud(g.id).then(r=>{ if(r&&r.ok){ store.deletedIds=store.deletedIds.filter(i=>i!==g.id); save(); } }).catch(e=>logError('deleteGarmentCloud', e, {user:'La prenda se ha borrado aquí, pero no en la nube. Se reintentará.'}));
     el.remove(); fichaId=null; render(); toast('Prenda eliminada');
   };
-  el.querySelector('#wear').onclick=()=>{ haptic(); g.worn++; g.lastWorn='Hoy'; g.lastWornAt=new Date().toISOString(); save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
+  el.querySelector('#wear').onclick=function(){
+    // Antes el botón seguía vivo y un doble toque inflaba el contador. Y
+    // lastWorn se guardaba como el texto "Hoy", que no envejecía nunca: la
+    // ficha seguía diciendo "Última vez: Hoy" seis meses después.
+    if(this.disabled) return;
+    this.disabled=true;
+    haptic(); g.worn=(+g.worn||0)+1; g.lastWornAt=new Date().toISOString(); g.lastWorn=fmtDesde(g.lastWornAt);
+    save(); if(session)cloud.pushGarment(g);
+    renderFicha(); render();
+  };
   el.querySelectorAll('[data-ff]').forEach(b=>b.onclick=()=>{ haptic(); g.fitFeedback=g.fitFeedback===b.dataset.ff?null:b.dataset.ff; save(); if(session)cloud.pushGarment(g); renderFicha(); });
   const kmIn=el.querySelector('#km_in');
   if(kmIn){
@@ -1034,7 +1111,13 @@ function editGarment(g){
     <button class="btn dark" id="esave" style="margin-top:6px">${svg('check',18)} Guardar cambios</button></div>`;
   document.body.appendChild(el);
   el.querySelector('#eb').onclick=()=>el.remove();
-  el.querySelector('#esave').onclick=()=>{ Object.assign(g,readForm(el)); save(); if(session)cloud.pushGarment(g); el.remove(); renderFicha(); render(); };
+  el.querySelector('#esave').onclick=()=>{
+    // readForm no devuelve catGroup: antes, cambiar la categoría aquí dejaba el
+    // grupo antiguo para siempre y la prenda quedaba mal archivada en la
+    // cuadrícula, en la maleta y en el motor de gustos. canonPrenda lo recalcula.
+    Object.assign(g, canonPrenda({...g, ...readForm(el)}));
+    save(); if(session)cloud.pushGarment(g); el.remove(); renderFicha(); render();
+  };
 }
 
 async function prepararVenta(g,plataforma){
@@ -1384,21 +1467,39 @@ function showPrenda(m,r,img){
     haptic();
     if(b.dataset.ctxpick==='deporte'){ const sp=stage.querySelector('#f_sport'); if(sp)sp.focus(); }
   });
-  stage.querySelector('#conf').onclick=()=>{
+  stage.querySelector('#conf').onclick=async function(){
+    if(this.disabled) return;           // sin esto, un doble toque añadía dos
     const d=readForm(stage);
-    addGarment({...d,catGroup:catToGroup(d.cat),bought:'Hoy',worn:0,lastWorn:'—',status:'uso',img:img?.dataUrl||'./assets/silbon-raquetas-white.png',photos:[],docs:[],tags:[]});
+    const prenda={...d,bought:'Hoy',worn:0,lastWorn:'—',status:'uso',
+      img:img?.dataUrl||'./assets/silbon-raquetas-white.png',photos:[],docs:[],tags:[]};
+    this.disabled=true;
+    const seguir=await avisarSiDuplicado(prenda);
+    if(!seguir){ this.disabled=false; return; }
+    addGarment(prenda);
     trackPurchaseEvent({brand:d.brand,cat:d.cat,price:d.price,store:d.store,channel:'manual'});
     celebrateAdd(img?.dataUrl, `${d.brand||''} ${d.name||d.cat}`).then(()=>{ addMode='choose'; go('armario'); });
   };
 }
 
+/* OJO con la versión anterior: el cotejo parcial usaba `''.includes('')`, que
+   es true, así que una categoría VACÍA devolvía la primera del catálogo —
+   "Camiseta manga corta". Cada línea de ticket que el OCR no supo clasificar se
+   guardaba como camiseta, con total aplomo. Y 'camisa' devolvía 'Sobrecamisa',
+   'chaqueta' devolvía 'Chaqueta denim' y 'pantalón' devolvía 'Pantalón vestir':
+   la respuesta genérica y correcta de la IA se volvía específica y errónea. */
 function normalizeCat(cat=''){
-  const c=cat.toLowerCase().trim();
+  const c=String(cat||'').toLowerCase().trim();
+  if(!c) return '';                                   // sin dato no se inventa uno
   const map={'t-shirt':'Camiseta manga corta','tshirt':'Camiseta manga corta','tee':'Camiseta manga corta','long sleeve':'Camiseta manga larga','polo':'Polo','top':'Top','pants':'Pantalón vestir','trousers':'Pantalón vestir','jeans':'Vaquero','denim':'Vaquero','chino':'Chino','chinos':'Chino','cargo':'Cargo','jogger':'Jogger','joggers':'Jogger','shorts':'Shorts','short':'Shorts','shirt':'Camisa Oxford','sweater':'Jersey','jumper':'Jersey','knit':'Jersey','knitwear':'Jersey','sweatshirt':'Sudadera','hoodie':'Hoodie','blazer':'Blazer','jacket':'Bomber','coat':'Abrigo','parka':'Parka','puffer':'Plumífero','overcoat':'Abrigo','shoes':'Sneakers','sneakers':'Sneakers','trainers':'Sneakers','boots':'Botas','dress':'Vestido','skirt':'Falda','bag':'Bolso','backpack':'Mochila','cap':'Gorra','belt':'Cinturón'};
   if(map[c])return map[c];
   const exact=CATS_DETAIL.find(x=>x.toLowerCase()===c); if(exact)return exact;
-  const partial=CATS_DETAIL.find(x=>x.toLowerCase().includes(c)||c.includes(x.toLowerCase()));
-  return partial||cat||'Otro';
+  // solo se acepta una coincidencia parcial si la entrada tiene entidad y es
+  // la ÚNICA del catálogo que encaja; si hay varias, ambigua = se deja tal cual
+  if(c.length>=4){
+    const cands=CATS_DETAIL.filter(x=>{const xl=x.toLowerCase(); return xl===c||xl.startsWith(c+' ')||xl.endsWith(' '+c);});
+    if(cands.length===1) return cands[0];
+  }
+  return cat||'';
 }
 
 function showTicket(m,r,img){
@@ -1621,17 +1722,11 @@ function openTicketImage(url){
   ov.onclick=()=>ov.remove(); document.body.appendChild(ov);
 }
 
-function catToGroup(cat=''){
-  if(/camiseta|polo|top/i.test(cat))return 'Camisetas';
-  if(/camisa/i.test(cat))return 'Camisas';
-  if(/jersey|sudadera|hoodie/i.test(cat))return 'Jerséis/Sudaderas';
-  if(/blazer|americana|bomber|chaqueta|abrigo|parka|gabardina|plum|cort/i.test(cat))return 'Chaquetas/Abrigos';
-  if(/pantalón|chino|cargo|jogger|vaquero|wide|straight|slim/i.test(cat))return 'Pantalones';
-  if(/short|bermuda/i.test(cat))return 'Shorts/Bermudas';
-  if(/falda|vestido/i.test(cat))return 'Faldas/Vestidos';
-  if(/sneak|bamba|running|bota|botín|sandal|chanc|tacón|oxford|mocasín|zapatill/i.test(cat))return 'Calzado';
-  return 'Accesorios';
-}
+/* catToGroup vivía aquí con nueve grupos y lib/taste.js tenía otra lista de
+   siete que NO coincidía ("Chaquetas/Abrigos" contra "Abrigos/Chaquetas").
+   Además el `return 'Accesorios'` final mandaba a accesorios los botines, los
+   tacones y los mocasines, porque el regex llevaba tilde y el catálogo no.
+   Ahora la lista está en lib/normalize.js y la usan los dos lados. */
 
 /* ═══════════════════════════════════════════
    ESCÁNER EN TIENDA (Feature 32)
@@ -2752,9 +2847,14 @@ function renderAuth(slot){
       <div id="diagout"></div>`;
     slot.querySelector('#logout').onclick=()=>cloud.signOut().then(()=>{
       session=null;
-      // privacidad: al cerrar sesión, este dispositivo vuelve a la demo limpia
+      // privacidad: al cerrar sesión no queda NADA de esta persona en el aparato
+      borrarRastroLocal();
       store={garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[],ownerId:null};
       save(); render(); toast('Sesión cerrada');
+    }).catch(e=>{
+      // sin este catch, un cierre de sesión sin conexión no hacía nada en
+      // absoluto: ni mensaje, ni cambio de pantalla, y los datos seguían ahí
+      logError('signOut', e, {user:'No se pudo cerrar sesión. Comprueba tu conexión e inténtalo otra vez.'});
     });
     slot.querySelector('#diag').onclick=async function(){
       this.disabled=true; this.innerHTML=`${svg('load',18)} Probando…`; this.querySelector('svg')?.classList.add('spin');
@@ -3682,20 +3782,73 @@ function safeRender(){ if(route==='add'&&addMode!=='choose')return; render(); }
 /* El almacenamiento local pertenece a UNA cuenta. Al entrar con una cuenta
    distinta (o crear una nueva), se parte de cero: los datos de la demo o de
    otro usuario JAMÁS se mezclan ni se suben a la cuenta nueva. */
+/* Claves de localStorage que contienen datos de UNA persona. Al cambiar de
+   cuenta hay que barrerlas todas, no solo el armario: si no, el historial de
+   escaneos, el registro de errores y el token de Strava del anterior siguen
+   ahí y se mezclan con los del siguiente. */
+const CLAVES_POR_USUARIO = ['drobe.v3.corrupto','drobe.scan_events','drobe.strava_pending','drobe.errors','drobe.seen','drobe.tour'];
+function borrarRastroLocal(){
+  CLAVES_POR_USUARIO.forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+  try{ clearErrorLog(); }catch(e){}
+}
+
+let adoptadas = 0;   // prendas rescatadas de la sesión sin cuenta, para avisar
+const tienda_vacia = uid => ({garments:[],profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[],ownerId:uid||null});
+const ES_SEMILLA = new Set(SEED.map(g=>g.id));
+
+/* El almacenamiento local pertenece a UNA cuenta.
+
+   Antes esto vaciaba el armario en cuanto el uid no coincidía — incluido el
+   caso de alguien que había estado probando la app SIN cuenta y se registraba
+   después. Ese usuario perdía todo lo que había metido, en silencio, justo
+   después de que la app le prometiera que sus prendas "se guardarán en este
+   dispositivo". Ahora se distingue:
+
+   - Nunca reclamado (ownerId ausente): las prendas no son de nadie todavía,
+     así que las adopta la cuenta que entra y se suben a la nube.
+   - Otra cuenta: se borra todo. Los datos de una persona jamás se mezclan
+     con los de otra. */
 function alignStoreToAccount(){
   const uid=session?.user?.id; if(!uid)return;
-  if(store.ownerId!==uid){
-    store={garments:[],profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[],ownerId:uid};
+  if(store.ownerId===uid) return;
+
+  const nuncaReclamado = !store.ownerId;
+  const propias = nuncaReclamado ? (store.garments||[]).filter(g=>!ES_SEMILLA.has(g.id)) : [];
+
+  if(nuncaReclamado && propias.length){
+    // adopción: se conserva lo que el usuario metió, se tira la demo
+    store = {
+      ...store,
+      garments: propias,
+      ownerId: uid,
+      deletedIds: store.deletedIds||[]
+    };
     save();
+    adoptadas = propias.length;   // syncFromCloud las subirá y avisará
+    return;
   }
+
+  borrarRastroLocal();
+  store = tienda_vacia(uid);
+  save();
 }
 async function syncFromCloud(){
   if(!session)return;
   alignStoreToAccount();
   await cloud.ensureProfile(); // garantizar FK antes de cualquier escritura
   cloud.ensureSocialProfile().catch(e=>logError('ensureSocialProfile', e)); // encontrable en Comunidad desde el primer login
+  if(adoptadas){
+    toast(`${adoptadas} prenda${adoptadas>1?'s':''} de antes de registrarte ${adoptadas>1?'se han':'se ha'} añadido a tu cuenta`);
+    adoptadas=0;
+  }
   let rows=await cloud.pullGarments();
-  if(rows===null) return; // error de red: conservar lo local, no tocar nada
+  // Si la nube no responde nos quedamos con lo local, que a estas alturas ya es
+  // lo correcto para esta cuenta. Antes el comentario decía "conservar lo local"
+  // pero align ya lo había vaciado y persistido, así que no conservaba nada.
+  if(rows===null){
+    logError('syncFromCloud.pull', 'la nube no respondió', {user:'No he podido traer tu armario de la nube. Vuelve a intentarlo cuando tengas conexión.'});
+    return;
+  }
   // tombstones: prendas borradas en local no deben resucitar JAMÁS.
   // El tombstone solo se limpia cuando la nube CONFIRMA el borrado.
   const dead=new Set(store.deletedIds||[]);

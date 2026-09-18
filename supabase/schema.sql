@@ -174,6 +174,16 @@ create table if not exists friendships (
   created_at timestamptz default now(),
   unique (requester_id, addressee_id)
 );
+-- Sin este CHECK, `status` es texto libre: una fila con cualquier valor
+-- inesperado se colaría por las políticas. Solo existen dos estados.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'friendships_status_check') then
+    alter table friendships add constraint friendships_status_check
+      check (status in ('pending','accepted'));
+  end if;
+end $$;
+
 create index if not exists friendships_req_idx on friendships(requester_id);
 create index if not exists friendships_addr_idx on friendships(addressee_id);
 
@@ -307,7 +317,16 @@ create policy "garments delete" on garments for delete using (auth.uid() = user_
 drop policy if exists "social readable" on social_profiles;
 drop policy if exists "social insert"   on social_profiles;
 drop policy if exists "social update"   on social_profiles;
-create policy "social readable" on social_profiles for select using (true);
+-- Antes: `using (true)`, es decir, cualquiera sin iniciar sesión podía listar
+-- TODOS los usuarios y sus uuid. Eso es lo que convertía el fallo de arriba en
+-- explotable a escala: se enumeraban las víctimas sin ni siquiera una cuenta.
+-- Ahora: los armarios públicos siguen siendo visibles sin sesión (lo necesita
+-- la vista ?u=usuario), el resto exige estar dentro.
+create policy "social readable" on social_profiles for select using (
+  public = true
+  or auth.uid() = id
+  or auth.role() = 'authenticated'
+);
 create policy "social insert"   on social_profiles for insert with check (auth.uid() = id);
 create policy "social update"   on social_profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 
@@ -318,8 +337,15 @@ drop policy if exists "friendship update"  on friendships;
 drop policy if exists "friendship delete"  on friendships;
 create policy "friendship visible" on friendships for select
   using (auth.uid() = requester_id or auth.uid() = addressee_id);
+-- FALLO DE SEGURIDAD CORREGIDO: esta política solo comprobaba quién era el
+-- solicitante, no el estado. Cualquiera podía insertar directamente una fila
+-- {requester_id: yo, addressee_id: víctima, status: 'accepted'} contra la API
+-- con la anon key (que es pública por diseño) y, sin que la víctima se enterara,
+-- pasar a cumplir la política de lectura de garments: acceso completo al armario
+-- ajeno. Ahora una solicitud SOLO puede nacer 'pending'; aceptarla sigue siendo
+-- competencia exclusiva del destinatario ("friendship update", más abajo).
 create policy "friendship create" on friendships for insert
-  with check (auth.uid() = requester_id);
+  with check (auth.uid() = requester_id and status = 'pending');
 -- solo el destinatario puede aceptar una solicitud
 create policy "friendship update" on friendships for update
   using (auth.uid() = addressee_id) with check (auth.uid() = addressee_id);
@@ -341,10 +367,15 @@ create policy "message read" on messages for update
 -- ── SEARCH CACHE ──
 -- Compartida a propósito: es lo que estira la cuota de SerpApi.
 -- No contiene datos personales, solo resultados públicos de Google Shopping.
-drop policy if exists "cache read"  on search_cache;
-drop policy if exists "cache write" on search_cache;
-create policy "cache read"  on search_cache for select using (auth.role() = 'authenticated');
-create policy "cache write" on search_cache for all    using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+drop policy if exists "cache read"   on search_cache;
+drop policy if exists "cache write"  on search_cache;
+drop policy if exists "cache insert" on search_cache;
+-- La política anterior era `for all`, lo que incluía DELETE y UPDATE sobre
+-- CUALQUIER fila: un usuario podía vaciar la caché de todos o sobrescribir los
+-- resultados que verían otros. Ahora solo se puede leer y añadir; refrescar una
+-- entrada caducada es trabajo de drobe_prune_cache().
+create policy "cache read"   on search_cache for select using (auth.role() = 'authenticated');
+create policy "cache insert" on search_cache for insert with check (auth.role() = 'authenticated');
 
 -- ═══════════════════════════════════════════════════════════════
 -- STORAGE
