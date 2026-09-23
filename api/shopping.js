@@ -31,6 +31,7 @@ module.exports = async function handler(req, res) {
 
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e) { body = {}; } }
+  if (body && body.mode === 'tienda') { await tienda(body, key, res); return; }
   const query = (body && body.query) || '';
   const brand = (body && body.brand) || '';
   const productType = (body && body.productType) || ''; // "pantalón lino azul marino"
@@ -293,3 +294,123 @@ module.exports = async function handler(req, res) {
     res.status(200).json({ available: false, reason: e.message });
   }
 };
+
+
+/* ═══════════════════════════════════════════════════════════════
+   MODO TIENDA — «estoy en la tienda mirando unas Gazelle azules»
+
+   El modo de arriba hacía hasta doce llamadas a SerpApi EN FILA (cada una con
+   12 s de margen) y luego otras cinco para resolver enlaces: entre 8 y 40
+   segundos con el usuario de pie en la tienda, y la cuota de 100 búsquedas al
+   mes se iba en ocho escaneos. Además buscaba «Veja adidas gazelle azules»,
+   mezclando marcas en la misma consulta.
+
+   Aquí la app ya sabe qué es cada cosa (lib/modelos.js) y manda consultas
+   hechas: la exacta y una por alternativa. Van TODAS a la vez, sin segunda
+   ronda de enlaces, con 7 s de tope. Una búsqueda cuesta 1 + nº alternativas
+   (máximo 4) llamadas, y la app no pide alternativas en vivo si ya las tiene
+   en caché.
+   ═══════════════════════════════════════════════════════════════ */
+const sinAcentos = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const KIDS_RX = /\b(bebes?|infantil(es)?|ninos?|ninas?|kids?|junior|boys?|girls?|newborn|toddler|td|ps|gs)\b/;
+const WOMEN_RX = /\b(mujer(es)?|women|womens|woman|femenin[ao]|senora|lad(y|ies)|chica)\b/;
+const MEN_RX = /\b(hombres?|men|mens|man|masculin[oa]|caballeros?|chico)\b/;
+const JUNK_RX = /shein|temu|aliexpress|wish\b|banggood/i;
+const LOW_RX = /primark|lefties|kiabi|pepco/i;
+const USED_RX = /vinted|wallapop|micolet|depop|milanuncios|vestiaire|segunda mano|seminuevo|usado|percentil|cash converters|vibbo|reciclad/i;
+// Lo que sale al buscar unas zapatillas y no son unas zapatillas.
+const NO_PRODUCTO_RX = /\b(cordones?|plantillas?|calcetines?|funda|llavero|spray|limpiador|kit de limpieza|caja|bolsa|pegatinas?|poster|miniatura|peluche|colgante|charms?|protector)\b/;
+
+function parsePrecio(str) {
+  if (!str) return null;
+  const m = String(str).replace(/\./g, '').replace(',', '.').match(/(\d+(\.\d+)?)/);
+  return m ? parseFloat(m[1]) : null;
+}
+
+async function serp(q, key, country) {
+  const url = 'https://serpapi.com/search.json?engine=google_shopping&q=' + encodeURIComponent(q) + '&gl=' + country + '&hl=es&num=20&api_key=' + key;
+  const ctrl = new AbortController();
+  const tm = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    const d = await r.json();
+    if (d && d.error) return { error: d.error, items: [] };
+    return { items: (d && d.shopping_results) || [] };
+  } catch (e) {
+    return { error: e.name === 'AbortError' ? 'timeout' : e.message, items: [] };
+  } finally { clearTimeout(tm); }
+}
+
+function mapear(p) {
+  const pv = typeof p.extracted_price === 'number' ? p.extracted_price : parsePrecio(p.price);
+  const directo = p.link && !/google\.[^/]+\//i.test(p.link) ? p.link : '';
+  return {
+    title: p.title || '', price: p.price || (pv ? pv + ' €' : ''), price_value: pv,
+    source: p.source || '', thumbnail: p.thumbnail || '',
+    link: directo || p.product_link || ('https://www.google.com/search?tbm=shop&q=' + encodeURIComponent(p.title || ''))
+  };
+}
+
+function filtro({ requiere = [], colores = [], sexo = '', avgPrice = 0, usado = false }) {
+  const req = requiere.map(sinAcentos).filter(Boolean);
+  const cols = colores.map(sinAcentos).filter(Boolean);
+  return it => {
+    const t = sinAcentos(it.title), src = it.source || '';
+    if (!it.title) return false;
+    if (req.some(r => !(' ' + t + ' ').includes(' ' + r + ' '))) return false;   // tiene que ser ESE producto
+    if (NO_PRODUCTO_RX.test(t)) return false;
+    if (KIDS_RX.test(t)) return false;
+    if (sexo === 'hombre' && WOMEN_RX.test(t) && !MEN_RX.test(t)) return false;
+    if (sexo === 'mujer' && MEN_RX.test(t) && !WOMEN_RX.test(t)) return false;
+    if (JUNK_RX.test(src + ' ' + it.title)) return false;
+    if (avgPrice >= 35 && LOW_RX.test(src + ' ' + it.title)) return false;
+    if (!usado && (USED_RX.test(src) || USED_RX.test(it.title))) return false;
+    if (usado && !(USED_RX.test(src) || USED_RX.test(it.title))) return false;
+    if (it.price_value != null && it.price_value < 8) return false;
+    it.color_ok = !cols.length || cols.some(c => (' ' + t + ' ').includes(' ' + c + ' '));
+    return true;
+  };
+}
+const ordenar = (a, b) => (b.color_ok - a.color_ok) || ((a.price_value || 1e9) - (b.price_value || 1e9));
+function dedup(list) {
+  const vistos = new Set();
+  return list.filter(it => { const k = sinAcentos(it.title) + '|' + it.price_value + '|' + sinAcentos(it.source); if (vistos.has(k)) return false; vistos.add(k); return true; });
+}
+
+async function tienda(body, key, res) {
+  const t0 = Date.now();
+  const country = body.country || 'es';
+  const sexo = /^h/i.test(body.sex || '') ? 'hombre' : /^m/i.test(body.sex || '') ? 'mujer' : '';
+  const avgPrice = Number(body.avgPrice || 0);
+  const exacta = body.exacta && String(body.exacta.q || '').slice(0, 120);
+  const alts = (Array.isArray(body.alternativas) ? body.alternativas : []).slice(0, 3)
+    .filter(a => a && a.q).map(a => ({ ...a, q: String(a.q).slice(0, 120) }));
+  if (!exacta && !alts.length) { res.status(400).json({ error: 'Falta la consulta' }); return; }
+  const conSexo = q => (sexo && !/hombre|mujer|\bmen\b|women/i.test(q)) ? q + ' ' + sexo : q;
+
+  const trabajos = [];
+  if (exacta) trabajos.push(serp(conSexo(exacta), key, country));
+  alts.forEach(a => trabajos.push(serp(conSexo(a.q), key, country)));
+  if (exacta && body.usados) trabajos.push(serp(exacta + ' segunda mano', key, country));
+  const r = await Promise.all(trabajos);
+
+  let i = 0;
+  const errores = [];
+  const out = { available: true, exacta: [], alternativas: {}, usados: [] };
+  if (exacta) {
+    const x = r[i++]; if (x.error) errores.push(x.error);
+    out.exacta = dedup(x.items.map(mapear).filter(filtro({ ...body.exacta, sexo, avgPrice }))).sort(ordenar).slice(0, 6);
+  }
+  alts.forEach(a => {
+    const x = r[i++]; if (x.error) errores.push(x.error);
+    out.alternativas[a.id] = dedup(x.items.map(mapear).filter(filtro({ ...a, sexo, avgPrice }))).sort(ordenar).slice(0, 2);
+  });
+  if (exacta && body.usados) {
+    const x = r[i++]; if (x.error) errores.push(x.error);
+    out.usados = dedup(x.items.map(mapear).filter(filtro({ ...body.exacta, sexo, avgPrice, usado: true }))).sort(ordenar).slice(0, 3);
+  }
+  out.ms = Date.now() - t0;
+  if (errores.length) out.errores = [...new Set(errores)];
+  res.status(200).json(out);
+}
+module.exports._tienda = { filtro, sinAcentos, mapear };
