@@ -55,8 +55,9 @@ bundler.** Lo que se escribe es lo que se sirve. Eso condiciona todo:
    que el usuario ha hecho: comprar, ponerse, vender, guardar, rechazar. Si no
    hay datos, baja `confidence` y se dice; no se rellena con supuestos.
 6. **`lib/taste.js` es puro.** No toca DOM ni red. Recibe `store`, devuelve
-   objetos. Si lo cambias, ejecuta `node lib/taste.test.mjs` (47 pruebas) y
-   `node lib/normalize.test.mjs` (213). Cero dependencias, menos de un segundo.
+   objetos. Si lo cambias, ejecuta `node lib/taste.test.mjs` (47 pruebas),
+   `node lib/normalize.test.mjs` (255) y `node lib/modelos.test.mjs` (46).
+   Cero dependencias, menos de un segundo.
 7. **El esquema real vive en `supabase/schema.sql`.** Si cambias tablas desde el
    panel de Supabase, actualiza el fichero en el mismo commit. Cuando dejaron de
    coincidir, las escrituras fallaban en silencio (Supabase no devuelve error
@@ -75,6 +76,19 @@ bundler.** Lo que se escribe es lo que se sirve. Eso condiciona todo:
    `styles.css` o `lib/`. Si no, iOS sirve la versión anterior.
 11. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
    usuario o de la red.
+12. **Los modelos viven en `lib/modelos.js`.** «adidas gazelle azules» es un
+   modelo de una familia (retro de ante), y las alternativas salen de esa
+   familia, no de «zapatillas azules». Es puro como `taste.js`. Si añades un
+   modelo, su marca tiene que estar en el catálogo de `normalize.js` (hay una
+   prueba que lo comprueba).
+13. **Calle o deporte se pregunta.** `contextoDe()` decide y dice si está
+   segura. Si no lo está, el alta no se guarda hasta que el usuario elige.
+   Lo que el usuario elige se marca `contextoConfirmado` y la app no vuelve a
+   tocarlo.
+14. **La marca dice de dónde sale.** `resolverMarca()` devuelve `via`:
+   `catalogo`, `errata`, `desconocida` o `palabra`. En visión solo cuenta como
+   leída la del catálogo; lo demás es «probable» y se pregunta. Nunca se sube
+   una confianza por encontrar la marca en el catálogo.
 
 ## Arquitectura de datos
 
@@ -154,6 +168,23 @@ Lo que lo garantiza:
   de pasar por `canonPrenda`: metían el literal "—" como marca y como color, y
   forzaban `fit: 'Regular Fit'` a TODO, también al calzado. Eran la séptima y
   la octava vía de alta saltándose la puerta. Ya no.
+- **El modelo de visión se apagó y nadie se enteró.** Groq retiró
+  `llama-4-scout` el 17 de julio de 2026 y `api/ai.js` lo tenía escrito a
+  fuego: desde ese día toda foto volvía con error y la app decía «no pude
+  analizarla». Ahora hay una lista de modelos que se prueba en orden, y el
+  motivo del fallo se enseña y se registra. Revisa
+  console.groq.com/docs/deprecations de vez en cuando.
+- La corrección de erratas de marca convertía palabras en marcas: «Manga» →
+  Mango, «Basics» → Asics. Y `depurarVision` subía la confianza a 0,8 al
+  encontrar la marca en el catálogo, justo en las lecturas dudosas. Ni lo uno
+  ni lo otro.
+- La flecha atrás de la maleta ya hecha llamaba a `maletaStep2`, que tocaba
+  `#next1`, un botón del paso 1 que ya no existía: reventaba y la flecha no
+  hacía nada. Cuidado con las funciones de paso que asumen el DOM del paso
+  anterior.
+- El historial apilaba una entrada por cada overlay nuevo (y la ficha se
+  repinta entera a cada toque), y cerrar con la flecha no quitaba ninguna. Ahora
+  hay un solo centinela y el botón atrás del móvil hace lo mismo que la flecha.
 - La marca llegaba de la IA como la leía: "AUTRY MEDALIST" es el modelo, no la
   marca, y para el motor de gustos era una marca distinta de "Autry". Todo lo
   que devuelve visión pasa ahora por `depurarVision()`.
@@ -169,7 +200,7 @@ mensajes de verdad y empuja.
 
 | Servicio | Estado |
 |---|---|
-| Groq (`/api/ai`) | funcionando |
-| SerpApi (`/api/shopping`) | funcionando, 100 búsquedas/mes |
+| Groq (`/api/ai`) | visión con `qwen/qwen3.8-27b` (el anterior se retiró el 17-07-2026); texto con `llama-3.3-70b-versatile` |
+| SerpApi (`/api/shopping`) | 100 búsquedas/mes; el modo `tienda` hace todas las consultas a la vez |
 | Strava (`/api/strava`) | arreglado; requiere `STRAVA_CLIENT_ID` y `_SECRET` |
 | Supabase | requiere ejecutar `supabase/schema.sql` actualizado |
