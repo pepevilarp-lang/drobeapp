@@ -63,9 +63,17 @@ bundler.** Lo que se escribe es lo que se sirve. Eso condiciona todo:
    cuando RLS bloquea un update: borra cero filas y calla).
 8. **`schema.sql` nunca borra.** Todo es `if not exists` / `add column if not
    exists`, y se puede ejecutar sobre producción. No vuelvas a meter `DROP TABLE`.
-9. **Sube `CACHE` en `sw.js`** en cada despliegue que toque `app.js`,
+9. **El color se declara arriba de `styles.css` y en ningún otro sitio.**
+   Blanco, gris neutro y terracota. Nada de hex sueltos: si hace falta un tono
+   que no está, se añade como variable con su contraste comprobado. Sobre
+   superficies oscuras van `--on-noir`, `--on-noir-2`, `--on-noir-3` y
+   `--accent-lite`. Todos los tonos de texto pasan AA (4.5:1) sobre blanco,
+   sobre `--paper` y sobre `--surface-2` — incluido `--ink3`, que se usa en
+   etiquetas de 10px y antes se quedaba en 3.1:1. La única pareja por debajo es
+   `--ink3` sobre `--accent-soft` (4.35): ahí va `--ink2`.
+10. **Sube `CACHE` en `sw.js`** en cada despliegue que toque `app.js`,
    `styles.css` o `lib/`. Si no, iOS sirve la versión anterior.
-10. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
+11. **Escapa siempre con `esc()`** lo que entre en `innerHTML` desde datos del
    usuario o de la red.
 
 ## Arquitectura de datos
@@ -126,6 +134,16 @@ Lo que lo garantiza:
   malicioso con la anon key, que es pública.
 - `fromRow` declaraba la clave `photos` dos veces en el mismo objeto literal y
   ganaba la segunda (`[]`): las fotos se subían y se borraban en cada sync.
+- El estilista tenía un «¿Qué vendo?» que ordenaba el armario por coste por
+  uso y proponía las tres peores. Era un ranking disfrazado de consejo: no
+  sabía si esa prenda es de una boda ni si la estación acababa de cambiar.
+  Proponer vender algo recién comprado quema la confianza en todo lo demás que
+  dice el estilista. La decisión de vender se toma en la ficha, con la prenda
+  delante.
+- Publicar en Wallapop/Vinted desde la app NO se puede automatizar: sus API de
+  publicación son solo para vendedores profesionales en lista blanca, y el
+  navegador no deja que drobeapp mande peticiones autenticadas a otro dominio.
+  Lo máximo es `navigator.share` con la foto adjunta. No lo intentes otra vez.
 - `readForm` no devuelve `catGroup`, así que `Object.assign(g, readForm(el))`
   dejaba el grupo desincronizado. Por eso la edición pasa por `canonPrenda`.
 - El contenedor del formulario se llamaba `${pre}form`, que con `pre='f_'` es
