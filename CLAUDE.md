@@ -185,6 +185,15 @@ Lo que lo garantiza:
 - El historial apilaba una entrada por cada overlay nuevo (y la ficha se
   repinta entera a cada toque), y cerrar con la flecha no quitaba ninguna. Ahora
   hay un solo centinela y el botón atrás del móvil hace lo mismo que la flecha.
+- **Los enlaces de las ofertas iban a Google, no a la tienda.** Google Shopping
+  dejó de dar el enlace de la tienda en los resultados: solo el de su ficha,
+  que en el móvil se abre mal. Y el motor que se usaba para resolverlo
+  (`google_product`) ya no lo devuelve, así que se gastaban hasta cinco
+  búsquedas por consulta para nada. Ahora el enlace real se pide al TOCAR la
+  oferta (modo `enlace`, `google_immersive_product`, una búsqueda), a la misma
+  tienda de la tarjeta, y la ventana se abre en el mismo toque para que Safari
+  no la bloquee. Lo que no tiene producto concreto abre la búsqueda del modelo
+  en Zalando, no en Google.
 - La marca llegaba de la IA como la leía: "AUTRY MEDALIST" es el modelo, no la
   marca, y para el motor de gustos era una marca distinta de "Autry". Todo lo
   que devuelve visión pasa ahora por `depurarVision()`.
