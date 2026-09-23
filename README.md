@@ -27,7 +27,9 @@ manifest.webmanifest    PWA
 
 lib/log.js              registro de errores  ← todo fallo pasa por aquí
 lib/normalize.js        normalización        ← marcas, catálogo de tipos, colores, duplicados
-lib/normalize.test.mjs  213 pruebas
+lib/normalize.test.mjs  255 pruebas
+lib/modelos.js          modelos icónicos     ← «Gazelle azules»: marca, modelo, estilo y alternativas; calle o deporte
+lib/modelos.test.mjs    46 pruebas
 lib/taste.js            motor de gustos      ← puntuación de recomendaciones
 lib/taste.test.mjs      47 pruebas
 lib/supabase.js         cliente de la nube: auth, sync, social, storage
@@ -58,7 +60,8 @@ cae a un parser heurístico si `/api/ai` no responde.
 Pruebas del motor de recomendación (sin dependencias, tarda menos de un segundo):
 
 ```bash
-node lib/normalize.test.mjs   # 213 pruebas
+node lib/normalize.test.mjs   # 255 pruebas
+node lib/modelos.test.mjs     # 46 pruebas
 node lib/taste.test.mjs       # 47 pruebas
 ```
 
@@ -167,11 +170,16 @@ se ignora con un comentario que explique por qué.
 
 - `app.js` sigue siendo un monolito de ~3.600 líneas. Trocearlo en `views/`,
   `core/` y `features/` es la mejora que más acelera todo lo demás.
-- 260 pruebas automáticas cubren normalización y motor de gustos, pero las
+- 348 pruebas automáticas cubren normalización, modelos y motor de gustos, pero las
   vistas de `app.js` no tienen pruebas propias.
 - La versión de caché del service worker se sube a mano.
 - SerpApi: 100 búsquedas/mes en el plan gratuito. `search_cache` (24 h,
-  compartida entre usuarios) estira la cuota pero no elimina el techo.
+  compartida entre usuarios) estira la cuota pero no elimina el techo. El modo
+  tienda gasta 1 + nº de alternativas (máximo 4) por búsqueda: unas 25 al mes.
+- La lista de modelos de `lib/modelos.js` es a mano. Lo que no está ahí se
+  resuelve con la IA, sin precio en vivo.
+- Groq retira modelos sin avisar a la app. `api/ai.js` prueba una lista por
+  orden y se puede cambiar con `GROQ_VISION_MODEL` / `GROQ_TEXT_MODEL` en Vercel.
 
 ## El siguiente paso de verdad
 
