@@ -1239,3 +1239,7 @@ html.vt-prenda .ficha-body>*{animation:none;opacity:1}
   .wardtop .wsbtn{width:34px;height:34px}
 }
 @media (max-width:379px){ .wardtop .viewseg button{padding:7px 8px} }
+
+/* Mientras se busca el enlace de la tienda al tocar una oferta. */
+.offer.abriendo,.alt-card.abriendo{opacity:.6;pointer-events:none}
+.offer.abriendo .offer-p::after,.alt-card.abriendo .alt-p::after{content:'Abriendo…';display:block;font-size:10.5px;font-weight:600;color:var(--ink3)}
