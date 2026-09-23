@@ -6,6 +6,9 @@ y vendes lo que no usas.
 
 **Producción:** https://drobeapp-theta.vercel.app
 
+**Diseño:** blanco, gris neutro y terracota. El lienzo no tiene color — lo pone
+la ropa. Todo el texto pasa AA sobre los tres fondos del sistema.
+
 **Stack:** HTML/CSS/JS vanilla sin build · Three.js por CDN · Vercel (estático +
 funciones en `/api`) · Supabase (auth + Postgres + Storage) · Groq (IA) ·
 SerpApi (Google Shopping).
@@ -130,6 +133,10 @@ ha hecho de verdad.
   material, talla y tienda tienen una sola forma canónica. Sin esto, la misma
   marca escrita de dos maneras se repartía la afinidad y la marca favorita del
   usuario desaparecía de sus propias recomendaciones.
+- **La vista del armario.** Tres densidades (mosaico, medio y editorial) y cinco
+  órdenes, entre ellos **«Sin usar»** — lo que llevas más tiempo sin ponerte,
+  con el dato encima de cada prenda. Es la petición que más se repite en las
+  reseñas de la categoría y que no tiene ninguna competidora.
 - **Duplicados.** Al añadir una prenda se busca si ya hay algo igual y se avisa
   antes de guardar, con la prenda parecida delante.
 - **Detección.** La marca que lee la IA se resuelve contra un catálogo de más
