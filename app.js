@@ -1,0 +1,4638 @@
+/* El 3D (Three.js) se carga DINÁMICAMENTE y de forma opcional.
+   Si Safari iOS no resuelve el importmap, la app arranca igual sin 3D. */
+let _ward3d = null;
+async function load3D(){
+  if(_ward3d) return _ward3d;
+  try{ _ward3d = await import('./wardrobe3d.js'); return _ward3d; }
+  catch(e){ return null; }
+}
+function unmountWardrobe3D(){ try{ _ward3d?.unmountWardrobe3D?.(); }catch(e){ logError('wardrobe3d.unmount', e); } }
+function resetView(){ try{ _ward3d?.resetView?.(); }catch(e){ logError('wardrobe3d.resetView', e); } }
+
+/* Manejo de errores visible en móvil (si la app no llega a renderizar) */
+window.addEventListener('error',e=>{
+  const app=document.getElementById('app');
+  if(app&&!app.querySelector('.shell')){
+    app.innerHTML='<div style="padding:40px 24px;font-family:system-ui">'+
+      '<div style="font-size:24px;font-weight:800;margin-bottom:12px">Dro<span style="color:#3B6CF6">be</span></div>'+
+      '<div style="font-size:15px;color:#555;line-height:1.5">Algo no cargó bien. Detalle:</div>'+
+      '<pre style="font-size:12px;background:#f4f4f4;padding:12px;border-radius:8px;margin-top:10px;white-space:pre-wrap;word-break:break-word">'+((e.message||'error')+'\n'+(e.filename||'')+':'+(e.lineno||''))+'</pre>'+
+      '<button onclick="location.reload()" style="margin-top:16px;background:#15161B;color:#fff;border:none;border-radius:12px;padding:14px 20px;font-size:15px;font-weight:600;width:100%">Reintentar</button>'+
+      '</div>';
+  }
+});
+import * as cloud from './lib/supabase.js';
+import { logError, guard, installGlobalHandlers, onError as onLoggedError, errorLog, clearErrorLog, errorReport } from './lib/log.js';
+import * as taste from './lib/taste.js';
+import { canonPrenda, buscarDuplicados, canonMarca, canonColor, canonTalla, canonMaterial,
+         canonPatron, grupoDe, catToGroup, huellaTicket, GRUPOS, COLORES, PATRONES, slug,
+         canonCat, grupoDeCat, camposPrenda, tallaDe, canonCorte, ejemploNombre, marcaConocida,
+         CATS, CATALOGO, CORTES, MARCAS_CATALOGO, resolverMarca } from './lib/normalize.js';
+import { parseBusqueda, alternativas as alternativasModelo, yaTieneParecido, buscarModelo, contextoDe, FAMILIAS, MODELOS } from './lib/modelos.js';
+
+installGlobalHandlers();
+
+/* Un fallo que afecta al usuario se le dice. Los demás quedan registrados en
+   Perfil → Diagnóstico. Lo que NO puede volver a pasar es que no pase nada. */
+onLoggedError(entry => {
+  if (!entry.user) return;
+  const old = document.getElementById('errtoast'); if (old) old.remove();
+  const el = document.createElement('div');
+  el.id = 'errtoast'; el.className = 'syncwarn err';
+  el.textContent = entry.user;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+});
+
+let session = null;
+
+/* ═══════════════════════════════════════════
+   ICONOS
+═══════════════════════════════════════════ */
+const IC = {
+  shirt:'M16 3.5l4 2.2v4.2l-2.8 1V20.5H6.8V10.9L4 9.9V5.7l4-2.2 4 2.6 4-2.6z',
+  add:'M12 5v14M5 12h14',spark:'M12 3l1.7 4.6L18 9l-4.3 1.4L12 15l-1.7-4.6L6 9l4.3-1.4z',
+  chart:'M5 19V11M12 19V5M19 19v-5',user:'M12 12.5a3.4 3.4 0 100-6.8 3.4 3.4 0 000 6.8zM5 19.5a7 7 0 0114 0',
+  cam:'M4 8.5h3l1.8-2h6.4L17 8.5h3v10H4v-10zM12 13.5a3 3 0 100 .01',
+  scan:'M4 8V6a2 2 0 012-2h2M20 8V6a2 2 0 00-2-2h-2M4 16v2a2 2 0 002 2h2M20 16v2a2 2 0 01-2 2h-2M4 12h16',
+  chev:'M9 6l6 6-6 6',back:'M15 6l-6 6 6 6',x:'M6 6l12 12M18 6L6 18',check:'M5 12.5l4.5 4.5L19 7',
+  tag:'M4 4h7l9 9-7 7-9-9V4zM8 8h.01',load:'M12 3a9 9 0 109 9',
+  sun:'M12 4v2M12 18v2M4 12H2M22 12h-2M12 8.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z',
+  bell:'M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6zM10 20a2 2 0 004 0',
+  /* Densidad del armario: una, dos o tres columnas. El icono ES la rejilla que
+     va a salir, así que no hace falta leer nada para saber qué hace. */
+  grid1:'M4 4h16v16H4z',
+  grid2:'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  grid3:'M4 4h4.5v4.5H4zM9.75 4h4.5v4.5h-4.5zM15.5 4h4.5v4.5h-4.5zM4 9.75h4.5v4.5H4zM9.75 9.75h4.5v4.5h-4.5zM15.5 9.75h4.5v4.5h-4.5zM4 15.5h4.5v4.5H4zM9.75 15.5h4.5v4.5h-4.5zM15.5 15.5h4.5v4.5h-4.5z',
+  file:'M6 3h8l4 4v14H6zM14 3v4h4',shield:'M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z',
+  receipt:'M5 3h14v18l-2-1-2 1-2-1-2 1-2-1-2 1zM8 8h8M8 12h8',
+  pen:'M4 20l4-1 11-11-3-3L5 16zM14 5l3 3',
+  plane:'M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z',
+  cal:'M3 5h18v16H3zM3 9h18M8 5V3M16 5V3',
+  drop:'M12 3C8 9 5 13 5 17a7 7 0 0014 0c0-4-3-8-7-14z',
+  wind:'M4 8h12a4 4 0 000-8M4 13h16M4 18h12a4 4 0 010 8',
+  star:'M12 2l3 6.3 6.9 1-5 4.8 1.2 6.9-6.1-3.2-6.1 3.2 1.2-6.9-5-4.8 6.9-1z',
+  pack:'M3 3h18l-2 14H5zM3 3L1 1M8 21h8M12 12V6M9 9l3-3 3 3',
+  store:'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9zM9 22V12h6v10',
+  dna:'M12 3c-4 6-4 12 0 18M12 3c4 6 4 12 0 18M6 6h12M6 18h12M5 10h14M5 14h14',
+  score:'M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z',
+  target:'M12 22a10 10 0 100-20 10 10 0 000 20zM12 18a6 6 0 100-12 6 6 0 000 12zM12 14a2 2 0 100-4 2 2 0 000 4z',
+  lock:'M5 11V7a7 7 0 0114 0v4M3 11h18v10H3z',
+  gift:'M20 12v10H4V12M22 7H2v5h20V7zM12 22V7M12 7a5 2.5 0 010-5 5 2.5 0 010 5zM12 7a5 2.5 0 000-5 5 2.5 0 000 5',
+  sync:'M4 12a8 8 0 0113.7-5.7L20 8M20 4v4h-4M20 12a8 8 0 01-13.7 5.7L4 16M4 20v-4h4',
+  trash:'M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13',
+  people:'M9 12.5a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4zM2.5 20a6.5 6.5 0 0113 0M16 6.2a3.2 3.2 0 010 6.2M18 20a6.5 6.5 0 00-3-5.3',
+  chat:'M4 5h16v11H9l-4 4V5z',
+  send:'M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z',
+  heart:'M12 21C6 16.5 3 13 3 9a4.5 4.5 0 019-1 4.5 4.5 0 019 1c0 4-3 7.5-9 12z',
+  search:'M11 4a7 7 0 105.2 11.7L21 20M11 4a7 7 0 015.2 11.7',
+  hanger:'M12 5a2 2 0 112 2c-1 0-1.5.6-1.5 1.3 0 .5.3.9.8 1.2L21 14H3l7.7-4.2',
+  eye:'M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12zM12 14.8a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6z',
+  camera:'M3 8h3l2-3h8l2 3h3v12H3V8zM12 17a4 4 0 100-8 4 4 0 000 8z',
+};
+const svg = (n,s,w) => {
+  s=s||22; w=w||1.7;
+  const d=IC[n]||'';
+  const paths=d.split('M').filter(Boolean).map(p=>`<path d="M${p}"/>`).join('');
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+};
+
+/* ═══ EL SÍMBOLO ═══
+   Una D partida en dos: la barra y el arco no se tocan. Ese hueco es la puerta
+   del armario entreabierta. Geometría canónica sobre un viewBox de 120 — es la
+   misma que hay en assets/mark.svg y en los iconos de la app. No la toques sin
+   regenerar también los PNG.
+   Hereda currentColor, así que se tiñe solo según dónde se ponga. */
+const dmark = (s,fill) => {
+  s = s || 24;
+  const c = fill || 'currentColor';
+  return `<svg class="dmark" width="${s}" height="${s}" viewBox="0 0 120 120" aria-hidden="true" focusable="false">`
+    + `<rect x="27" y="20" width="18" height="80" fill="${c}"/>`
+    + `<path d="M 53 20 A 40 40 0 0 1 53 100 Z" fill="${c}"/></svg>`;
+};
+/* Logotipo completo: símbolo + DROBE. `size` es la altura del símbolo en px. */
+const wordmark = (size,cls) => {
+  const s = size || 22;
+  return `<div class="word ${cls||''}" style="--wm:${s}px">${dmark(s)}<span class="word-t">DROBE</span></div>`;
+};
+
+/* ═══════════════════════════════════════════
+   CATÁLOGOS
+═══════════════════════════════════════════ */
+/* El catálogo de tipos vive en lib/normalize.js, junto con su grupo y con los
+   cortes que tienen sentido en cada uno. Aquí estaba antes, y tenía cuatro
+   entradas para la misma zapatilla ('Sneakers', 'Bambas', 'Zapatillas
+   deportivas', 'Running') y una lista de cortes única que ofrecía "Wide Leg"
+   para un jersey y "Boxy" para un vaquero. */
+const CATS_DETAIL = CATS;
+const SEASONS = ['Primavera/Verano','Otoño/Invierno','Todo el año'];
+const FORMS = ['Casual','Smart casual','Formal','Deporte'];
+const SPORTS = ['Run','Ciclismo','Natación','Gym','Pádel/Tenis','Fútbol','Outdoor'];
+const CONDS = ['Nuevo con etiqueta','Como nuevo','Buen estado','Usado'];
+const TRIP_PLANS = ['Ciudad','Trabajo','Playa','Montaña','Festival','Boda','Deporte','Esquí'];
+const TRIP_ACTS = ['Caminar','Salir de noche','Senderismo','Restaurantes','Eventos','Playa','Piscina','Deporte','Compras'];
+const NEUTRAL_COLORS = ['Blanco','Negro','Gris','Crudo','Marino','Azul marino','Beige','Marrón'];
+const WEIGHT_KG = {'Camiseta manga corta':.18,'Camiseta manga larga':.22,'Polo':.25,'Jersey':.55,'Sudadera':.5,'Hoodie':.55,'Camisa Oxford':.3,'Camisa lino':.26,'Camisa vestir':.32,'Blazer':.65,'Americana':.65,'Bomber':.72,'Chaqueta denim':.75,'Chaqueta cuero':.95,'Abrigo':1.2,'Gabardina':1.0,'Parka':1.1,'Plumífero':.85,'Vaquero':.68,'Chino':.55,'Cargo':.65,'Pantalón vestir':.52,'Shorts':.3,'Bermudas':.32,'Calzado':.8,'default':.35};
+const gWeight = cat => WEIGHT_KG[cat]||WEIGHT_KG.default;
+
+/* ═══════════════════════════════════════════
+   DATOS SEED
+═══════════════════════════════════════════ */
+const SEED = [
+  {id:'s1',brand:'Silbon',name:'Logo Raquetas',cat:'Camiseta manga corta',catGroup:'Camisetas',fit:'Regular Fit',color:'Blanco',colors:['Blanco','Marino'],material:'Algodón pima',size:'M',season:'Primavera/Verano',formality:'Casual',bought:'Abr 2024',store:'Silbon Diagonal',price:39.95,cond:'Buen estado',worn:9,lastWorn:'Hace 4 días',status:'uso',img:'./assets/silbon-raquetas-white.png',photos:[],docs:[],tags:['Básico']},
+  {id:'s2',brand:'Stone Island',name:'Jersey Punto Compass',cat:'Jersey',catGroup:'Jerséis/Sudaderas',fit:'Regular Fit',color:'Negro',colors:['Negro'],material:'Lana/algodón',size:'L',season:'Otoño/Invierno',formality:'Smart casual',bought:'Nov 2023',store:'El Corte Inglés',price:295,cond:'Como nuevo',worn:6,lastWorn:'Hace 2 semanas',status:'uso',img:'./assets/stoneisland-compass-black.png',photos:[],docs:[{type:'Ticket',icon:'receipt',name:'Ticket ECI nov-23.jpg',dt:'06 Nov 2023'},{type:'Garantía',icon:'shield',name:'Garantía 2 años.pdf',dt:'06 Nov 2023'}],tags:['Premium']},
+  {id:'s3',brand:'Scalpers',name:'Snake Skull',cat:'Camiseta manga corta',catGroup:'Camisetas',fit:'Regular Fit',color:'Gris',colors:['Gris','Mostaza'],material:'Algodón',size:'L',season:'Primavera/Verano',formality:'Casual',bought:'May 2024',store:'Scalpers.com',price:35.99,cond:'Buen estado',worn:12,lastWorn:'Hace 1 mes',status:'venta',img:'./assets/scalpers-snake-grey.png',photos:[],docs:[],tags:[]},
+  {id:'s4',brand:'Pepe Jeans',name:'Eggo Logo',cat:'Camiseta manga corta',catGroup:'Camisetas',fit:'Slim Fit',color:'Gris',colors:['Gris'],material:'Algodón',size:'M',season:'Todo el año',formality:'Casual',bought:'Ene 2024',store:'Zalando',price:29.99,cond:'Como nuevo',worn:14,lastWorn:'Ayer',status:'uso',img:'./assets/pepe-eggo-grey.png',photos:[],docs:[],tags:['Diario']},
+  {id:'s5',brand:'Stone Island',name:'Jersey Lana Crudo',cat:'Jersey',catGroup:'Jerséis/Sudaderas',fit:'Regular Fit',color:'Crudo',colors:['Crudo'],material:'Lana virgen',size:'L',season:'Otoño/Invierno',formality:'Smart casual',bought:'Dic 2022',store:'El Corte Inglés',price:320,cond:'Buen estado',worn:18,lastWorn:'Hace 3 días',status:'uso',img:'./assets/stoneisland-knit-cream.png',photos:[],docs:[],tags:['Premium']},
+  {id:'s6',brand:'Pepe Jeans',name:'Eggo Logo',cat:'Camiseta manga corta',catGroup:'Camisetas',fit:'Slim Fit',color:'Blanco',colors:['Blanco'],material:'Algodón',size:'M',season:'Todo el año',formality:'Casual',bought:'Sep 2023',store:'Zalando',price:29.99,cond:'Usado',worn:31,lastWorn:'Hoy',status:'uso',img:'./assets/pepe-eggo-white.png',photos:[],docs:[],tags:['Diario']},
+  {id:'s7',brand:'Scalpers',name:'Skull Animal Print',cat:'Camiseta manga corta',catGroup:'Camisetas',fit:'Regular Fit',color:'Blanco',colors:['Blanco','Mostaza'],material:'Algodón',size:'S',season:'Primavera/Verano',formality:'Casual',bought:'Jun 2024',store:'Scalpers.com',price:29.99,cond:'Como nuevo',worn:4,lastWorn:'Hace 2 meses',status:'uso',img:'./assets/scalpers-skull-white.png',photos:[],docs:[],tags:[]}
+];
+
+/* ═══════════════════════════════════════════
+   ESTADO
+═══════════════════════════════════════════ */
+const KEY = 'drobe.v3';
+let store = load();
+function load(){
+  try{ const r=localStorage.getItem(KEY); if(r){const s=JSON.parse(r);if(s.garments){s.profile=s.profile||{};s.maletas=s.maletas||[];s.tickets=s.tickets||[];s.wishlist=s.wishlist||[];s.scanLog=s.scanLog||[];s.deletedIds=s.deletedIds||[];return s;}} }
+  catch(e){
+    // se guarda la copia corrupta antes de empezar de cero: es recuperable
+    try{ localStorage.setItem(KEY+'.corrupto', localStorage.getItem(KEY)||''); }catch(e2){}
+    logError('load', e, {user:'No se pudo leer tu armario guardado. He empezado de cero en este dispositivo; si tienes cuenta, inicia sesión para recuperarlo.', fatal:true});
+  }
+  return {garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[]};
+}
+function save(){
+  // cualquier cambio del armario invalida el perfil de gusto memoizado
+  invalidateTaste();
+  try{ localStorage.setItem(KEY,JSON.stringify(store)); }
+  catch(e){
+    logError('save', e, {user:'No se pudo guardar en este dispositivo. Puede que no quede espacio.'});
+  }
+}
+function showSyncWarning(reason){
+  const old=document.getElementById('syncwarn'); if(old)old.remove();
+  const el=document.createElement('div'); el.id='syncwarn'; el.className='syncwarn';
+  const txt = reason==='no_session' ? 'Guardado solo en este dispositivo. Confirma tu email o vuelve a entrar.'
+    : reason==='no_client' ? 'Guardado solo en local (sin conexión a la nube).'
+    : 'No se pudo guardar en la nube. Motivo: '+(reason||'desconocido');
+  el.innerHTML=`${svg('spark',16)} ${esc(txt)}`;
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),7000);
+}
+const findG = id => store.garments.find(g=>g.id==id);
+function addGarment(g){
+  haptic(12);
+  // Canonizar en la PUERTA: las seis vías de alta (foto, varias prendas, ráfaga,
+  // ticket, email y manual) rellenaban los campos de seis maneras distintas —
+  // unas con '', otras con '—', otras sin el campo. A partir de aquí, una sola.
+  g = canonPrenda(g);
+  /* Calle o deporte: si el usuario no lo ha elegido a mano y la regla está
+     segura (unas mallas, una Pegasus, una Gazelle), manda la regla. Antes todo
+     lo que no traía `context` —ticket, email, ráfaga, alta manual— acababa en
+     calle, y por eso la cuadrícula de calle salía llena de ropa de correr. */
+  if(!g.contextoConfirmado){ try{ const cd=contextoDe(g); if(cd.seguro)g.context=cd.context; }catch(e){ logError('contextoDe',e); } }
+  g.id=g.id||('g'+Date.now()+Math.random().toString(36).slice(2,6));
+  g.addedAt=g.addedAt||new Date().toISOString();
+  store.garments.unshift(g); save();
+  if(session){
+    cloud.pushGarment(g)
+      .then(r=>{ if(!r||!r.ok) showSyncWarning(r&&r.reason); })
+      .catch(e=>showSyncWarning(e&&e.message));
+  } else showSyncWarning('no_session');
+}
+/* ═══ ¿YA TIENES ESTO? ═══
+   No había ninguna detección de duplicados en ninguna vía de alta: fotografiar
+   dos veces la misma camiseta, o escanear dos veces el mismo ticket, creaba
+   copias que luego contaban doble en la saturación, en las bandas de precio y
+   en la afinidad de marca. Esto avisa ANTES de guardar, y deja decidir. */
+function avisarSiDuplicado(g){
+  return new Promise(resolve=>{
+    let dups=[];
+    try{ dups=buscarDuplicados(g, store.garments).slice(0,3); }
+    catch(e){ logError('buscarDuplicados', e); }
+    if(!dups.length) return resolve(true);
+    const d=dups[0];
+    const ov=document.createElement('div'); ov.className='sheet-ov';
+    ov.innerHTML=`<div class="sheet">
+      <div class="sheet-bar"></div>
+      <div class="sheet-t">¿No la tienes ya?</div>
+      <div class="sub" style="margin:-6px 0 14px">${d.score===1?'Esto es idéntico a algo que ya está en tu armario.':'Se parece mucho a algo que ya tienes.'}</div>
+      ${dups.map(x=>`<div class="dup-row">
+        <div class="dup-ph">${x.garment.img?`<img src="${esc(x.garment.img)}"/>`:svg('shirt',20)}</div>
+        <div class="dup-info">
+          <div class="dup-n">${esc([x.garment.brand,x.garment.name].filter(Boolean).join(' · ')||x.garment.cat||'Prenda')}</div>
+          <div class="dup-m">${esc([x.garment.color,x.garment.size&&('talla '+x.garment.size)].filter(Boolean).join(' · '))}${x.motivo?' — '+esc(x.motivo):''}</div>
+        </div>
+        <div class="dup-pct">${Math.round(x.score*100)}%</div>
+      </div>`).join('')}
+      <button class="btn dark" id="dup_no" style="margin-top:16px">No añadirla</button>
+      <button class="btn ghost" id="dup_si" style="margin-top:8px">Añadir igualmente</button>
+    </div>`;
+    document.body.appendChild(ov);
+    requestAnimationFrame(()=>ov.classList.add('show'));
+    const cerrar=v=>{ ov.classList.remove('show'); setTimeout(()=>ov.remove(),300); resolve(v); };
+    ov.querySelector('#dup_si').onclick=()=>cerrar(true);
+    ov.querySelector('#dup_no').onclick=()=>cerrar(false);
+    ov.onclick=e=>{ if(e.target===ov) cerrar(false); };
+  });
+}
+
+/* ═══ MOTOR DE GUSTOS ═══
+   La lógica vive en lib/taste.js (módulo puro, con pruebas en lib/taste.test.mjs).
+   Aquí solo queda el pegamento: memoización y la firma que ya usaba la app.
+
+   Qué aprende, todo de señales reales y nunca inventadas:
+   - marcas ponderadas por uso, gasto y recencia (venderlas o no ponérselas resta)
+   - bandas de precio POR CATEGORÍA (un abrigo se compara con abrigos, no con
+     el ticket medio global: ese era el fallo que descartaba prendas buenas)
+   - paleta de color ponderada por uso real
+   - saturación del armario: qué tiene ya de sobra y qué le falta
+   - tallas por marca y por categoría
+   - qué rechaza en tienda y por qué
+   - cuánta confianza merece el perfil (con 4 prendas no se afirma nada) */
+let _tasteCache = null, _tasteKey = '';
+function tasteProfile(){
+  // el perfil se recalcula solo cuando cambia algo que lo afecta
+  const key = store.garments.length + '|' + (store.scanLog||[]).length + '|' +
+    (store.wishlist||[]).length + '|' + JSON.stringify(store.profile?.likedBrands||[]) +
+    '|' + (store.profile?.sex||'') + '|' + store.garments.reduce((s,g)=>s+(g.worn||0),0);
+  if(_tasteCache && _tasteKey === key) return _tasteCache;
+  try{
+    _tasteCache = taste.buildTasteProfile(store);
+    _tasteKey = key;
+  }catch(e){
+    logError('tasteProfile', e);
+    _tasteCache = taste.buildTasteProfile({garments:[],profile:store.profile||{}});
+    _tasteKey = '';
+  }
+  return _tasteCache;
+}
+function invalidateTaste(){ _tasteKey=''; }
+
+// compatibilidad con el código existente, que espera estos campos
+function fashionProfile(){
+  const P = tasteProfile();
+  return {
+    ...P,
+    colors: P.topColors,
+    materials: P.topMaterials,
+    fits: P.topFit ? [P.topFit] : [],
+    cats: Object.keys(P.saturation),
+    soldBrands: P.rejectedBrands,
+    wishBrands: (store.wishlist||[]).map(w=>w.brand).filter(Boolean).slice(0,3),
+    likedBrands: store.profile?.likedBrands||[],
+    scanBrands: (store.scanLog||[]).map(s=>s.brand).filter(Boolean).slice(0,3),
+    adjBrands: store.profile?.adjBrands?.list||[]
+  };
+}
+
+/* Puntuación 0-100 de un producto. Devuelve solo el número por compatibilidad;
+   scoreOfferFull() da además las razones, que es lo que se pinta en pantalla. */
+function styleMatchScore(o,P,hints){ return taste.scoreOffer(o, P||tasteProfile(), hints||{}).score; }
+function scoreOfferFull(o,hints){ return taste.scoreOffer(o, tasteProfile(), hints||{}); }
+
+/* Curación: puntúa, corta por umbral, deduplica y diversifica.
+   Cada resultado sale con _score y _reasons para poder explicar el porqué. */
+function curateOffers(items,{threshold=80,maxPerBrand=3,brandHints=[],max=12}={}){
+  try{
+    return taste.curate(items, tasteProfile(), {threshold,maxPerBrand,brandHints,max});
+  }catch(e){
+    logError('curateOffers', e, {extra:{count:items?.length}});
+    return (items||[]).slice(0,6);
+  }
+}
+/* Por qué no salió nada: mejor que una pantalla vacía sin explicación. */
+function explainNoOffers(items,hints){
+  try{ return taste.explainEmpty(items, tasteProfile(), hints||{}); }
+  catch(e){ return 'No he encontrado nada que encaje con tu estilo.'; }
+}
+
+/* marcas equivalentes: mismo estilo y segmento, distinto logo (caché semanal) */
+async function ensureAdjacentBrands(){
+  const P=fashionProfile();
+  if(!P.topBrands.length)return [];
+  const cached=store.profile?.adjBrands;
+  const key=P.topBrands.slice(0,4).join(',');
+  if(cached&&cached.key===key&&Date.now()-new Date(cached.at).getTime()<7*864e5)return cached.list;
+  const r=await callAI('Eres experto en marcas de moda en España. Devuelve SOLO JSON: {"marcas":["m1","m2","m3","m4"]} — 4 marcas del MISMO segmento de precio y misma estética que las del usuario, que NO estén ya en su lista, compradas por el mismo tipo de cliente. Nada de segmento inferior.',
+    `Marcas del usuario: ${P.topBrands.join(', ')}. Ticket medio: ${Math.round(P.avgPrice)}€. Sexo: ${P.sex||'?'}. Estilo: ${P.plainRatio>0.7?'minimalista, prendas lisas':'mixto'}.`);
+  const list=((r&&r.marcas)||[]).filter(x=>typeof x==='string'&&x.length>1).slice(0,4);
+  if(list.length){ store.profile=store.profile||{}; store.profile.adjBrands={list,at:new Date().toISOString(),key}; save(); }
+  return list;
+}
+
+/* varias prendas en UNA foto: un formulario por prenda, todas de golpe */
+function showMultiPrenda(m,r,img){
+  const items=(r.items||[]).slice(0,6).map(depurarVision);
+  const stage=m?.querySelector?.('#stage')||m;
+  stage.innerHTML=`
+    <div class="note reveal" style="margin-bottom:14px">${svg('check',18)}<span>He detectado <b>${items.length} prendas</b> en la foto. Revisa cada una — nunca invento.</span></div>
+    ${img?`<div class="scanimg reveal" style="animation-delay:.05s"><img src="${img.dataUrl}"/></div>`:''}
+    ${items.map((it,i)=>`<div class="mp-card reveal" style="animation-delay:${.08+i*.05}s">
+      <div class="mp-head" data-mp="${i}"><span class="mp-num">${i+1}</span><span class="mp-t">${esc(it.brand&&it.brand!=='—'?it.brand+' · ':'')}${esc(it.name||it.cat||'Prenda')}</span><span class="arr">${svg('chev',18)}</span></div>
+      <div class="mp-body" id="mpb${i}" style="display:${i===0?'block':'none'}">${garmentFormHTML(it,{},'mp'+i+'_')}</div>
+    </div>`).join('')}
+    <button class="btn dark reveal" id="mpconf" style="margin-top:14px;animation-delay:.2s">${svg('add',18,2)} Añadir ${items.length} prendas al armario</button>`;
+  wireGarmentForms(stage);
+  stage.querySelectorAll('[data-mp]').forEach(h=>h.onclick=()=>{ const b=stage.querySelector('#mpb'+h.dataset.mp); b.style.display=b.style.display==='none'?'block':'none'; });
+  stage.querySelector('#mpconf').onclick=()=>{
+    haptic(12);
+    items.forEach((it,i)=>{
+      const d=readFormPrefixed(stage,'mp'+i+'_');
+      addGarment({...d,price:parseFloat(d.price)||0,colors:[d.color],bought:'Hoy',worn:0,lastWorn:'—',status:'uso',img:img?.dataUrl||'',photos:[],docs:[],tags:[]});
+    });
+    celebrateAdd(img?.dataUrl,items.length+' prendas añadidas').then(()=>{ addMode='choose'; go('armario'); });
+  };
+}
+
+/* varias prendas fin */
+/* ═══ ¿DE DÓNDE ES? ═══
+   Foto de alguien llevando una prenda (o de la prenda) → la IA la identifica
+   con firma visual detallada → búsqueda exacta; si no hay certeza, alternativas
+   MUY parecidas, filtradas contra la firma. La foto del usuario se muestra al
+   lado de cada candidato: la comparación final siempre es contra la imagen. */
+async function openDeDonde(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='dedonde';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="ddb">${svg('back',20)}</button><span class="t">¿De dónde es?</span></div>
+    <div class="sub" style="margin-bottom:16px">Foto de alguien llevándola, de una tienda o de tu galería. La identifico o te doy alternativas casi idénticas — nunca cualquier cosa.</div>
+    <div id="dd_stage">
+      <label class="btn dark" style="cursor:pointer">${svg('camera',18)} Hacer o subir foto<input type="file" id="dd_file" accept="image/*" style="display:none"/></label>
+    </div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#ddb').onclick=()=>el.remove();
+  el.querySelector('#dd_file').onchange=async(e)=>{
+    const file=e.target.files&&e.target.files[0]; if(!file)return;
+    const stage=el.querySelector('#dd_stage');
+    stage.innerHTML=`<div class="skel" style="aspect-ratio:3/4;max-width:220px;margin:0 auto;border-radius:16px"></div><div class="sub" style="text-align:center;margin-top:12px">Analizando la prenda…</div>`;
+    let img; try{ img=await imageToBase64(file,1152,0.85); }catch(err){ stage.innerHTML=`<div class="note warn">${svg('spark',16)}<span>No pude leer la imagen. Prueba con otra.</span></div>`; return; }
+    if(!el.isConnected)return;
+    // 1) FIRMA VISUAL: identificación conservadora con señales
+    const idr=await callAI(`Eres el mejor identificador de prendas del mundo. Analiza la prenda MÁS protagonista de la foto. Devuelve SOLO JSON:
+{"prenda":"tipo exacto (camisa oxford, zapatilla running...)","marca":"solo si la reconoces con ALTA seguridad, si no vacío","modelo":"solo si lo reconoces con ALTA seguridad (ej Samba OG), si no vacío","color":"color principal preciso","señales":["3-5 rasgos visuales distintivos: tipo de cuello, botones, logo y su posición, suela, costuras, patrón"],"query_exacta":"marca + modelo + color si hay marca, si no vacío","query_parecidas":"la mejor búsqueda para encontrar prendas CASI IDÉNTICAS: tipo + color + rasgos clave + material aparente","confianza":0.0-1.0}
+REGLA DE ORO: mejor marca vacía que marca inventada. La confianza refleja SOLO la identificación de marca/modelo.`,
+      'Identifica la prenda de la foto.',img);
+    if(!el.isConnected)return;
+    if(!idr||!idr.prenda){ stage.innerHTML=`<div class="note warn">${svg('spark',16)}<span>No distingo bien la prenda en esta foto. Prueba más cerca o con mejor luz.</span></div>`; return; }
+    const sure=idr.marca&&(idr.confianza||0)>=0.7;
+    const u=userContext();
+    stage.innerHTML=`
+      <div class="dd-id">
+        <div class="dd-ph"><img src="${img.dataUrl}"/></div>
+        <div class="dd-info">
+          <div class="dd-what">${esc(idr.prenda||'')} ${esc(idr.color||'')}</div>
+          ${sure?`<div class="dd-brand">${esc(idr.marca)}${idr.modelo?' · '+esc(idr.modelo):''}</div>`
+            :`<div class="dd-unsure">${svg('spark',13)} No puedo confirmar la marca al 100% — te enseño casi idénticas.</div>`}
+          ${(idr.señales||[]).length?`<div class="dd-sig">${idr.señales.slice(0,4).map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:''}
+        </div>
+      </div>
+      <div id="dd_res"><div class="skel" style="height:90px;border-radius:14px;margin-top:14px"></div><div class="skel" style="height:90px;border-radius:14px;margin-top:10px"></div></div>`;
+    const res=stage.querySelector('#dd_res');
+    // 2) BÚSQUEDA: exacta si hay marca; si no (o si la exacta falla), casi idénticas
+    const norm=t=>(t||'').toLowerCase();
+    let exact=[];
+    if(sure&&idr.query_exacta){
+      const r=await searchOffersExtensive({query:idr.query_exacta,brand:idr.marca,productType:[idr.modelo||idr.prenda,idr.color].filter(Boolean).join(' '),ownedBrands:u.topBrands,sex:'',avgPrice:0,channel:'new'});
+      exact=r?[...(r.exact||[]),...(r.alternatives||[])]:[];
+      // filtro duro: la marca DEBE estar; y el modelo (su primera palabra) si lo tenemos
+      exact=exact.filter(o=>norm(o.title+o.source).includes(norm(idr.marca)));
+      if(idr.modelo)exact=exact.filter(o=>norm(o.title).includes(norm(idr.modelo.split(' ')[0])));
+    }
+    let similar=[];
+    if(exact.length<3&&idr.query_parecidas){
+      const r2=await searchOffersExtensive({query:idr.query_parecidas,productType:[idr.prenda,idr.color].filter(Boolean).join(' '),ownedBrands:u.topBrands,sex:'',avgPrice:0,channel:'new'});
+      similar=r2?[...(r2.exact||[]),...(r2.alternatives||[])]:[];
+      // filtro duro: el tipo de prenda Y el color deben aparecer en el título
+      const typeW=norm(idr.prenda).split(' ')[0], colW=norm(idr.color).split(' ')[0];
+      similar=similar.filter(o=>norm(o.title).includes(typeW));
+      const withCol=similar.filter(o=>norm(o.title).includes(colW));
+      if(withCol.length>=2)similar=withCol; // el color manda si hay suficientes
+      const seen=new Set(exact.map(o=>o.title)); similar=similar.filter(o=>!seen.has(o.title));
+    }
+    if(!el.isConnected)return;
+    const row=o=>`<div class="dd-row"><div class="dd-mini"><img src="${img.dataUrl}"/></div><span class="dd-vs">vs</span>`+offerRowHTML(o)+`</div>`;
+    res.innerHTML=`
+      ${exact.length?`<div class="shead" style="margin-top:16px"><h2>${svg('check',15)} Encontrada</h2></div>`+exact.slice(0,4).map(row).join(''):''}
+      ${similar.length?`<div class="shead" style="margin-top:16px"><h2>${svg('search',15)} Casi idénticas</h2></div><div class="sub" style="margin:-2px 0 8px;font-size:12px">Mismo tipo, mismo color, mismos rasgos. Compara con tu foto.</div>`+similar.slice(0,5).map(row).join(''):''}
+      ${(!exact.length&&!similar.length)?`<div class="pt-empty" style="padding:26px 10px"><div class="pt-empty-t">No la encuentro con certeza.</div><div>Antes que enseñarte algo distinto, prefiero decírtelo. Prueba con una foto más cercana de la prenda.</div></div>`:''}
+      <button class="btn ghost" id="dd_again" style="margin-top:14px">${svg('camera',16)} Probar con otra foto</button>`;
+    res.querySelector('#dd_again').onclick=()=>{ el.remove(); openDeDonde(); };
+  };
+}
+
+/* ═══ HOJAS DE AJUSTES: contenido real, acciones reales, nada de teatro ═══ */
+function openSettingsSheet(kind){
+  const old=document.getElementById('setsheet'); if(old)old.remove();
+  const wrap=document.createElement('div'); wrap.id='setsheet'; wrap.className='sheet-ov';
+  let title='',body='';
+  if(kind==='cuenta'){
+    title='Cuenta y sincronización';
+    body=`
+      <div class="sh-row"><span>Estado</span><b>${session?'☁ Sincronizado':'Solo en este dispositivo'}</b></div>
+      ${session?`<div class="sh-row"><span>Cuenta</span><b>${esc(session.user?.email||'')}</b></div>`:''}
+      <div class="sh-row"><span>Prendas</span><b>${store.garments.length}</b></div>
+      <div class="sh-row"><span>Tickets · Maletas</span><b>${(store.tickets||[]).length} · ${(store.maletas||[]).length}</b></div>
+      ${session?`<button class="btn dark" id="sh_sync" style="margin-top:16px">${svg('sync',17)} Sincronizar ahora</button>`
+      :`<div class="sub" style="margin-top:14px">Inicia sesión desde Perfil para guardar tu armario en la nube.</div>`}`;
+  } else if(kind==='notifs'){
+    title='Notificaciones';
+    body=`
+      <div class="sub" style="line-height:1.6">Los avisos de Drobe viven dentro de la app, donde no molestan:</div>
+      <div class="sh-row" style="margin-top:12px"><span>Plazos de cambio y garantías</span><b>En Tickets</b></div>
+      <div class="sh-row"><span>Zapatillas por renovar</span><b>En el armario</b></div>
+      <div class="sh-row"><span>Bajadas de precio vigiladas</span><b>En Wishlist</b></div>
+      <div class="sh-row"><span>Mensajes de amigos</span><b>Punto en Comunidad</b></div>
+      <div class="sub" style="margin-top:14px;color:var(--ink3)">Notificaciones push al móvil: en el roadmap. No prometemos lo que aún no está.</div>`;
+  } else if(kind==='privacidad'){
+    title='Privacidad y datos';
+    body=`
+      <div class="sub" style="line-height:1.6">Tus datos viven en tu dispositivo y, si tienes cuenta, en tu espacio privado de la nube. Nadie ve tu armario salvo que tú lo compartas (amigos aceptados o enlace público).</div>
+      <div class="sub" style="line-height:1.6;margin-top:10px">Los tres consentimientos de Perfil controlan de verdad qué se comparte — revocar el de marcas borra tus agregados de la nube al instante.</div>
+      <button class="btn ghost" id="sh_export" style="margin-top:16px">${svg('pack',17)} Exportar mis datos (JSON)</button>`;
+  } else {
+    title='Acerca de Drobe';
+    body=`
+      <div style="font-family:var(--serif);font-size:22px;font-style:italic;line-height:1.3">El sistema operativo<br>de tu armario.</div>
+      <div class="sub" style="margin-top:12px;line-height:1.6">Drobe digitaliza tu ropa para que la conozcas de verdad: qué usas, qué te cuesta cada puesta, qué te falta y qué te sobra. Un principio innegociable: <b>nunca inventamos datos</b>.</div>
+      <div class="sh-row" style="margin-top:16px"><span>Versión</span><b>v67</b></div>
+      <div class="sh-row"><span>Hecho en</span><b>Barcelona</b></div>`;
+  }
+  wrap.innerHTML=`<div class="sheet">
+    <div class="sheet-bar"></div>
+    <div class="sheet-t">${title}</div>
+    ${body}
+    <button class="btn ghost" id="sh_close" style="margin-top:14px">Cerrar</button>
+  </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(()=>wrap.classList.add('show'));
+  const close=()=>{ wrap.classList.remove('show'); setTimeout(()=>wrap.remove(),300); };
+  wrap.onclick=e=>{ if(e.target===wrap)close(); };
+  wrap.querySelector('#sh_close').onclick=close;
+  wrap.querySelector('#sh_sync')?.addEventListener('click',async function(){
+    this.disabled=true; this.innerHTML=`${svg('load',17)} Sincronizando…`; this.querySelector('svg').classList.add('spin');
+    await syncFromCloud();
+    this.innerHTML=`${svg('check',17)} Todo al día`; haptic();
+    setTimeout(close,900);
+  });
+  wrap.querySelector('#sh_export')?.addEventListener('click',()=>{
+    const data=JSON.stringify(store,null,2);
+    const blob=new Blob([data],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='drobe-datos-'+new Date().toISOString().slice(0,10)+'.json';
+    a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    toast('Datos exportados');
+  });
+}
+
+/* ═══ FOTO DE ESTUDIO ═══
+   Recorta la prenda del fondo (modelo de segmentación en el navegador,
+   sin servidores ni coste) y la presenta sobre blanco roto uniforme,
+   vertical 3:4. La prenda es SIEMPRE la real: no se retoca ni "desarruga". */
+let _bgLib=null;
+const BG_VER='1.5.5';
+// los modelos viven en el paquete de DATOS, no en el principal
+const BG_CDN=`https://cdn.jsdelivr.net/npm/@imgly/background-removal-data@${BG_VER}/dist/`;
+async function loadBgLib(){
+  if(_bgLib)return _bgLib;
+  _bgLib=await import(`https://cdn.jsdelivr.net/npm/@imgly/background-removal@${BG_VER}/+esm`).catch(()=>null);
+  return _bgLib;
+}
+function bgConfig(){
+  return {
+    publicPath: BG_CDN,          // dónde viven los recursos del modelo (clave: sin esto no arranca)
+    device: 'cpu',               // máxima compatibilidad iOS Safari
+    model: 'isnet_quint8',       // modelo compacto: mucho más rápido en móvil
+    output: { format: 'image/png', quality: 0.9 }
+  };
+}
+async function studioPhoto(dataUrl){
+  const lib=await loadBgLib();
+  if(!lib||!lib.removeBackground) throw new Error('No se pudo cargar el motor de recorte (¿sin conexión?).');
+  const srcBlob=await (await fetch(dataUrl)).blob();
+  // timeout de seguridad: nunca dejar el botón colgado
+  const cutBlob=await Promise.race([
+    lib.removeBackground(srcBlob, bgConfig()),
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error('El recorte tardó demasiado. Prueba de nuevo — la segunda vez es mucho más rápida.')),60000))
+  ]);
+  const cutUrl=URL.createObjectURL(cutBlob);
+  try{
+    const im=new Image();
+    await new Promise((res,rej)=>{ im.onload=res; im.onerror=()=>rej(new Error('recorte ilegible')); im.src=cutUrl; });
+    // localizar el bounding box real de la prenda (píxeles no transparentes)
+    const probe=document.createElement('canvas'); probe.width=im.width; probe.height=im.height;
+    const pctx=probe.getContext('2d'); pctx.drawImage(im,0,0);
+    const d=pctx.getImageData(0,0,probe.width,probe.height).data;
+    let minX=probe.width,minY=probe.height,maxX=0,maxY=0,found=false;
+    for(let y=0;y<probe.height;y+=2)for(let x=0;x<probe.width;x+=2){
+      if(d[(y*probe.width+x)*4+3]>24){found=true;if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}
+    }
+    if(!found||maxX-minX<40||maxY-minY<40) throw new Error('No se distinguió bien la prenda.');
+    const bw=maxX-minX, bh=maxY-minY;
+    // lienzo de estudio: blanco roto, vertical 3:4, prenda centrada al 80%
+    const W=900,H=1200;
+    const c=document.createElement('canvas'); c.width=W; c.height=H;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='#F7F8FA'; ctx.fillRect(0,0,W,H);
+    const scale=Math.min((W*0.8)/bw,(H*0.8)/bh);
+    const dw=bw*scale, dh=bh*scale, dx=(W-dw)/2, dy=(H-dh)/2;
+    // sombra ambiental muy sutil (presentación, no retoque)
+    ctx.save(); ctx.shadowColor='rgba(17,20,28,.13)'; ctx.shadowBlur=30; ctx.shadowOffsetY=14;
+    ctx.drawImage(im,minX,minY,bw,bh,dx,dy,dw,dh); ctx.restore();
+    return c.toDataURL('image/jpeg',0.88);
+  } finally { URL.revokeObjectURL(cutUrl); }
+}
+
+/* celebración visual tras añadir una prenda (solo flujo individual, no ráfaga/ticket) */
+function celebrateAdd(imgSrc,label){
+  return new Promise(res=>{
+    const ov=document.createElement('div'); ov.className='celebrate-ov';
+    ov.innerHTML=`<div class="cel-card">
+      <div class="cel-ph">${imgSrc?`<img src="${esc(imgSrc)}"/>`:`<div class="cel-ph-empty">${svg('check',32)}</div>`}</div>
+      <div class="cel-check">${svg('check',28)}</div>
+      <div class="cel-label">${esc(label||'Añadida al armario')}</div>
+    </div>`;
+    document.body.appendChild(ov);
+    setTimeout(()=>ov.classList.add('show'),30);
+    setTimeout(()=>{ ov.classList.add('out'); setTimeout(()=>{ ov.remove(); res(); },400); },1100);
+  });
+}
+// Sin coercionar, una prenda sin precio daba `undefined/1` = NaN y la ficha
+// enseñaba literalmente "NaN €/uso". lib/taste.js ya lo hacía bien; ahora coinciden.
+const cpw = g => (+g.price||0)/Math.max(+g.worn||0,1);
+
+/* "Última vez" en lenguaje natural, calculada AL PINTAR a partir de la fecha
+   real. Antes se guardaba el texto "Hoy" en el momento de marcar el uso y ya no
+   cambiaba nunca: la ficha decía "Última vez: Hoy" medio año después. */
+function fmtDesde(iso){
+  if(!iso) return '—';
+  const t=Date.parse(iso); if(isNaN(t)) return String(iso);
+  const dias=Math.floor((Date.now()-t)/86400000);
+  if(dias<=0) return 'Hoy';
+  if(dias===1) return 'Ayer';
+  if(dias<7)  return `Hace ${dias} días`;
+  if(dias<14) return 'Hace 1 semana';
+  if(dias<31) return `Hace ${Math.floor(dias/7)} semanas`;
+  if(dias<61) return 'Hace 1 mes';
+  if(dias<365)return `Hace ${Math.round(dias/30)} meses`;
+  const a=Math.floor(dias/365); return a===1?'Hace más de un año':`Hace ${a} años`;
+}
+/* Texto a mostrar: la fecha real manda; el texto libre antiguo solo como reserva. */
+const ultimaVez = g => g.lastWornAt ? fmtDesde(g.lastWornAt) : (g.lastWorn||'—');
+
+/* ═══════════════════════════════════════════
+   ADN DE ESTILO (motor B2B)
+   Calcula el perfil completo del usuario a partir de su armario real.
+   Este objeto es el activo que las marcas pagan por conocer.
+═══════════════════════════════════════════ */
+function computeStyleDNA(ctx='calle'){
+  const gs = store.garments.filter(g=>g.status!=='venta'&&(g.context||'calle')===ctx);
+  if(!gs.length) return {};
+  const count = gs.length;
+  // marcas
+  const brands={}, brandSpend={};
+  gs.forEach(g=>{
+    if(!g.brand)return;
+    brands[g.brand]=(brands[g.brand]||0)+1;
+    brandSpend[g.brand]=(brandSpend[g.brand]||0)+(g.price||0);
+  });
+  const topBrands=Object.entries(brands).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([b,n])=>({brand:b,count:n,share:Math.round(n/count*100)}));
+  // colores
+  const colors={};
+  gs.forEach(g=>{ if(g.color)colors[g.color]=(colors[g.color]||0)+1; });
+  const topColors=Object.entries(colors).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([c,n])=>({color:c,share:Math.round(n/count*100)}));
+  const neutralPct=Math.round(gs.filter(g=>NEUTRAL_COLORS.includes(g.color)).length/count*100);
+  // fits
+  const fits={};
+  gs.forEach(g=>{ if(g.fit)fits[g.fit]=(fits[g.fit]||0)+1; });
+  const topFit=Object.entries(fits).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+  // formality
+  const forms={};
+  gs.forEach(g=>{ if(g.formality)forms[g.formality]=(forms[g.formality]||0)+1; });
+  const topFormality=Object.entries(forms).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+  // materiales
+  const mats={};
+  gs.forEach(g=>{ if(g.material)mats[g.material]=(mats[g.material]||0)+1; });
+  const topMaterials=Object.entries(mats).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([m])=>m);
+  // precios
+  const prices=gs.map(g=>g.price).filter(Boolean);
+  const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):0;
+  const maxPrice=prices.length?Math.max(...prices):0;
+  const totalValue=Math.round(prices.reduce((a,b)=>a+b,0));
+  // segmento de precio
+  const segment=avgPrice>150?'premium':avgPrice>60?'mid':'budget';
+  // categorías
+  const cats={};
+  gs.forEach(g=>{ const k=g.catGroup||catToGroup(g.cat||''); cats[k]=(cats[k]||0)+1; });
+  // comportamiento
+  const avgWorn=Math.round(gs.reduce((s,g)=>s+(g.worn||0),0)/count);
+  const deadPct=Math.round(gs.filter(g=>(g.worn||0)<=3).length/count*100);
+  const avgCpw=parseFloat((gs.reduce((s,g)=>s+cpw(g),0)/count).toFixed(2));
+  // tallas por marca
+  const brandSizes={};
+  gs.forEach(g=>{ if(!g.brand||!g.size)return; brandSizes[g.brand]=brandSizes[g.brand]||{}; brandSizes[g.brand][g.size]=(brandSizes[g.brand][g.size]||0)+1; });
+  const sizeByBrand={};
+  Object.keys(brandSizes).forEach(b=>{ const sz=brandSizes[b]; sizeByBrand[b]=Object.keys(sz).sort((a,b2)=>sz[b2]-sz[a])[0]; });
+  return {
+    topBrands, topColors, neutralPct, topFit, topFormality,
+    topMaterials, avgPrice, maxPrice, totalValue, segment,
+    categories:cats, avgWorn, deadPct, avgCpw, sizeByBrand,
+    garmentCount:count, computedAt: new Date().toISOString()
+  };
+}
+
+// Contexto del usuario: lo que Drobe sabe de él para personalizar TODO.
+// Cuantas más prendas tenga, más rico es este perfil → mejores recomendaciones.
+function userContext(){
+  const P=tasteProfile();
+  return {
+    sex: P.sex||'',
+    age: P.age||'',
+    segment: P.segment==='unknown'?'':P.segment,  // premium / mid / budget
+    avgPrice: Math.round(P.avgPrice)||0,          // ticket medio
+    topBrands: P.topBrands.slice(0,6),            // marcas que ya usa, por afinidad real
+    topColors: P.topColors.slice(0,5),            // colores que lleva, ponderados por uso
+    topFit: P.topFit||'',                         // corte preferido
+    topFormality: P.topFormality||'',             // registro
+    materials: P.topMaterials||[],
+    sizes: P.sizeByCat||{},                       // qué talla gasta en cada cosa
+    priceBands: P.priceBands||{},                 // cuánto paga por categoría
+    gaps: P.gaps||[],                             // qué le falta
+    confidence: P.confidence,
+    garmentCount: P.garmentCount||0
+  };
+}
+/* Frase de contexto para los prompts de IA.
+   Mucho más rica que antes: precios por categoría, tallas, saturación, huecos,
+   marcas rechazadas y dónde compra. Es lo que hace que el modelo acierte en vez
+   de recomendar genéricamente. */
+function userContextPrompt(){
+  try{ return taste.profilePrompt(tasteProfile()); }
+  catch(e){ logError('userContextPrompt', e); return 'El usuario aún no tiene prendas registradas; no asumas gustos.'; }
+}
+
+// Drobe Score (0-100): salud del armario
+function computeDrobeScore(){
+  const gs=store.garments.filter(g=>g.status!=='venta');
+  if(!gs.length) return 0;
+  const dna=computeStyleDNA();
+  let s=50;
+  s += Math.min(20, gs.length*2);          // más prendas = más datos
+  s -= Math.min(20, dna.deadPct*0.4);      // prendas muertas penalizan
+  s += Math.min(10, Math.round(10-dna.avgCpw*0.5)); // bajo cpw = buena amortización
+  if(dna.sizeByBrand && Object.keys(dna.sizeByBrand).length>2) s+=5; // tallas conocidas
+  if(store.profile?.consent_data_b2b) s+=5;  // datos completos = score más alto
+  return Math.max(0,Math.min(100,Math.round(s)));
+}
+
+/* ═══════════════════════════════════════════
+   TRACKING B2B (eventos que informan a marcas)
+═══════════════════════════════════════════ */
+/* Eventos de uso: mejoran las recomendaciones de Drobe.
+   Se envían solo con el consentimiento «Mejorar Drobe con mis datos». */
+function trackScanEvent(data){
+  if(!store.profile?.consent_analytics) return;
+  // se guarda junto al uid dueño: si el fichero sobrevive a un cambio de
+  // cuenta, al leerlo se descarta lo que no sea de quien está dentro
+  const dueno=session?.user?.id||null;
+  const events=JSON.parse(localStorage.getItem('drobe.scan_events')||'[]').filter(e=>e.uid===dueno);
+  events.push({...data, uid:dueno, ts: new Date().toISOString()});
+  localStorage.setItem('drobe.scan_events', JSON.stringify(events.slice(-100)));
+  if(session) cloud.trackEvent('scan', data).catch(e=>logError('trackEvent.scan', e));
+}
+function trackPurchaseEvent(data){
+  if(!store.profile?.consent_analytics) return;
+  if(session) cloud.trackEvent('purchase', data).catch(e=>logError('trackEvent.purchase', e));
+}
+
+/* ═══════════════════════════════════════════
+   HELPERS UI
+═══════════════════════════════════════════ */
+const esc = s => (s==null?'':String(s)).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+// Haptics sutil (Android; no-op silencioso en iOS Safari)
+const haptic = (ms=10) => { try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} };
+function stars(c,total=5){ const n=Math.round((c||0)*total); return `<span class="stars">${Array.from({length:total},(_,i)=>`<span class="${i<n?'on':'off'}">★</span>`).join('')}</span>`; }
+function confBadge(c){ const p=Math.round((c||0)*100); return `<span class="cbadge ${p<60?'low':p<85?'med':'hi'}">${p}%</span>`; }
+/* `val` puede venir de la IA o de un ticket, es decir, de fuera. Antes se
+   inyectaba crudo en innerHTML. Ahora se escapa, como manda la regla 7 del
+   CLAUDE.md. */
+function optSel(opts,val,vacio){
+  const v=val==null?'':String(val);
+  /* Sin opción vacía, el navegador marca la primera: tras un fallo de la IA se
+     guardaba «Blanco / Algodón / Liso» sin que nadie lo hubiera detectado. Un
+     campo sin dato se queda sin dato, a la vista. (Auditoría C18) */
+  return (vacio?`<option value=""${!v?' selected':''}>${esc(vacio)}</option>`:'')
+    + (v&&!opts.includes(v)?`<option selected>${esc(v)}</option>`:'')
+    + opts.map(o=>`<option${o===v?' selected':''}>${esc(o)}</option>`).join('');
+}
+
+/* ═══════════════════════════════════════════
+   FORMULARIO PRENDA
+═══════════════════════════════════════════ */
+/* El desplegable de tipos, agrupado por familia. Con 74 tipos en una lista
+   plana había que recorrerla entera para encontrar «Mocasines»; agrupada, el
+   móvil enseña los encabezados y se llega en un gesto. */
+function catOptionsHTML(val){
+  const v=canonCat(val)||val||'';
+  const dentro=CATS.some(x=>x===v);
+  return (v&&!dentro?`<option selected>${esc(v)}</option>`:'')
+    + `<option value=""${!v?' selected':''}>— Elige el tipo —</option>`
+    + CATALOGO.map(([g,lista])=>`<optgroup label="${esc(g)}">${
+        lista.map(o=>`<option${o===v?' selected':''}>${esc(o)}</option>`).join('')}</optgroup>`).join('')
+    + `<option${v==='Otro'?' selected':''}>Otro</option>`;
+}
+
+/* ───────────────────────────────────────────
+   El formulario se adapta a lo que estás dando de alta.
+   Antes preguntaba los quince campos a todo: a unas zapatillas les pedía
+   «Corte: Slim Fit / Wide Leg / Overshirt», que no significa nada en calzado,
+   y «Estampado», que en una zapatilla casi siempre es ruido. Un campo que no
+   aplica no es inofensivo: se rellena igual, y un dato mal rellenado envenena
+   el motor de gustos para siempre.
+   Qué campos aplican a cada tipo lo decide `camposPrenda()`, en normalize.js,
+   que es también quien lo hace cumplir al guardar.
+─────────────────────────────────────────── */
+function garmentFormHTML(p={},c={},pre='f_'){
+  return `<div class="gform" id="${pre}gform" data-conf="${esc(JSON.stringify(c||{}))}">${garmentFieldsHTML(p,c,pre)}</div>`;
+}
+function garmentFieldsHTML(p={},c={},pre='f_'){
+  const isTicket=pre!=='f_';
+  const cat=canonCat(p.cat||p.category)||p.cat||p.category||'';
+  const campos=camposPrenda(cat);
+  const talla=tallaDe(cat);
+  const cortes=CORTES[campos.grupo]||[];
+  const esDeporte=contextoDelFormulario(p,c).context==='deporte';
+  // Los campos cortos se emparejan de dos en dos SOBRE LA MARCHA. Escribir las
+  // filas a mano dejaba huecos en cuanto un campo desaparecía: al quitarle el
+  // corte y el estampado a unas zapatillas, la talla y el precio se quedaban
+  // solos y a todo lo ancho, y el formulario parecía roto.
+  const filas=lista=>{
+    const v=lista.filter(Boolean); let out='';
+    for(let i=0;i<v.length;i+=2) out+=`<div class="row2">${v[i]}${v[i+1]||''}</div>`;
+    return out;
+  };
+  const fila=(a,b)=> b ? `<div class="row2">${a}${b}</div>` : a;
+  const campo=(label,inner,badge)=>`<div class="field"><label>${label}${badge!=null?confBadge(badge):''}</label>${inner}</div>`;
+
+  const fTipo=campo('Tipo',`<select id="${pre}cat">${catOptionsHTML(cat)}</select>`,c.cat);
+  const fCorte=campos.fit?campo('Corte',`<select id="${pre}fit">${optSel(cortes,canonCorte(p.fit,cat),'—')}</select>`,c.fit):'';
+  const fColor=campo('Color',`<select id="${pre}color">${optSel(COLORES,canonColor((p.colors&&p.colors[0])||p.color),'— Elige —')}</select>`,c.color);
+  const fMat=campo('Material',`<select id="${pre}mat">${optSel(MATERIALES_IA,canonMaterial(p.material),'—')}</select>`,c.material);
+  const fPat=campos.pattern?campo('Estampado',`<select id="${pre}pattern">${optSel(PATRONES,canonPatron(p.pattern),'—')}</select>`,c.pattern):'';
+  const fTalla=talla?campo(talla.ayuda?`Talla <span class="hint-i">${esc(talla.ayuda)}</span>`:'Talla',
+    `<input id="${pre}size" value="${esc(p.size)}" placeholder="${esc(talla.hint)}" inputmode="${talla.teclado}" autocapitalize="characters"/>`):'';
+  const fTemp=campos.season?campo('Temporada',`<select id="${pre}season">${optSel(SEASONS,p.season,'—')}</select>`):'';
+  const fForm=campo('Formalidad',`<select id="${pre}form">${optSel(FORMS,p.formality,'—')}</select>`);
+
+  return `
+  ${campo('Marca',`<input id="${pre}brand" value="${esc(p.brand)}" placeholder="Nike, Zara, Autry…" autocapitalize="words" list="${pre}marcas"/>
+    <datalist id="${pre}marcas">${sugerenciasMarca().map(m=>`<option value="${esc(m)}"></option>`).join('')}</datalist>`,c.brand)}
+  ${preguntaContextoHTML(p,c,pre)}
+  ${esDeporte?campo('Disciplina',`<select id="${pre}sport"><option value="">—</option>${SPORTS.map(x=>`<option ${p.sport===x?'selected':''}>${x}</option>`).join('')}</select>`):''}
+  ${campo('Nombre / modelo',`<input id="${pre}name" value="${esc(p.name)}" placeholder="${esc(ejemploNombre(cat))}"/>`,c.name)}
+  ${filas([fTipo,fCorte])}
+  ${filas([fColor,fMat,fPat,fTalla,
+    campo('Precio €',`<input id="${pre}price" inputmode="decimal" value="${esc(p.price)}" placeholder="0"/>`)])}
+  ${filas([fTemp,fForm,
+    campo('Estado',`<select id="${pre}cond">${optSel(CONDS,p.cond||(isTicket?'Nuevo con etiqueta':'Como nuevo'))}</select>`),
+    isTicket?'':campo('Tienda',`<input id="${pre}store" value="${esc(p.store)}" placeholder="Ecoalf.com"/>`)])}`;
+}
+
+/* ═══ ¿CALLE O DEPORTE? ═══
+   Es lo que separa las dos cuadrículas del armario, así que se pregunta de
+   frente, con dos botones, en vez de esconderlo en un desplegable. Llega
+   marcado con lo que la app cree; si no está segura, lo dice en naranja y no
+   deja guardar sin que el usuario elija. */
+function contextoDelFormulario(p={},c={}){
+  if(p.contextoConfirmado) return {context:p.context==='deporte'?'deporte':'calle', dudoso:false, motivo:'', confirmado:true};
+  let cd={context:'calle',seguro:false,motivo:''};
+  try{ cd=contextoDe(p); }catch(e){ logError('contextoDe',e); }
+  if(cd.seguro) return {context:cd.context, dudoso:false, motivo:cd.motivo};
+  const ia=p.context==='deporte'||p.context==='calle' ? p.context : '';
+  const conf=typeof c.context==='number'?c.context:(ia?0.5:0);
+  if(ia&&conf>=0.75) return {context:ia, dudoso:false, motivo:''};
+  return {context:ia||cd.context, dudoso:true, motivo:cd.motivo};
+}
+function preguntaContextoHTML(p,c,pre){
+  const x=contextoDelFormulario(p,c);
+  const b=(v,l,i)=>`<button type="button" class="${x.context===v&&!x.dudoso?'on':''}${x.context===v&&x.dudoso?' sug':''}" data-ctxv="${v}" aria-pressed="${x.context===v}">${svg(i,15)} ${l}</button>`;
+  return `<div class="ctxq${x.dudoso?' dudoso':''}" id="${pre}ctxq">
+    <div class="ctxq-t">¿Dónde la usas?</div>
+    <div class="ctxq-b">${b('calle','Calle','hanger')}${b('deporte','Deporte','spark')}</div>
+    <div class="ctxq-h">${x.dudoso?(x.motivo?esc(x.motivo)+'. ¿Es así?':'Elige una: así sale en la cuadrícula correcta.'):(x.motivo?esc(x.motivo):'')}</div>
+    <input type="hidden" id="${pre}ctx" value="${x.context}" data-confirmado="${x.confirmado?'1':''}"/>
+  </div>`;
+}
+/* ¿Falta responder a la pregunta de calle o deporte? Si falta, se lleva al
+   usuario hasta ella en vez de guardar a ciegas. */
+function faltaContexto(scope){
+  const q=scope&&scope.querySelector('.ctxq.dudoso');
+  if(!q)return false;
+  q.classList.remove('sacude'); void q.offsetWidth; q.classList.add('sacude');
+  q.scrollIntoView({behavior:'smooth',block:'center'});
+  haptic(20);
+  return true;
+}
+
+/* Las marcas que sugiere el autocompletado: primero las suyas, que son las que
+   va a repetir, y luego el catálogo. Escribir "auto" y que salga Autry evita
+   que entre "AUTRY MEDALIST" como marca nueva. */
+function sugerenciasMarca(){
+  try{
+    const suyas=marcasConocidas();
+    return [...new Set([...suyas,...MARCAS_CATALOGO])];
+  }catch(e){ return MARCAS_CATALOGO; }
+}
+
+/* Repinta el formulario cuando cambia el tipo o el contexto, conservando lo ya
+   escrito. Hay que llamarla después de insertar un formulario en el DOM. */
+function wireGarmentForms(root){
+  (root||document).querySelectorAll('.gform').forEach(cont=>{
+    if(cont.dataset.wired)return;
+    cont.dataset.wired='1';
+    const pre=cont.id.replace(/gform$/,'');
+    let conf={}; try{ conf=JSON.parse(cont.dataset.conf||'{}')||{}; }catch(e){ conf={}; }
+    const repinta=()=>{
+      const actual=readFormPrefixed(cont,pre);
+      // El campo que acaba de cambiar ya está confirmado por el usuario: se le
+      // quita la marca de "confianza baja" para que no siga en naranja.
+      const cat=canonCat(actual.cat)||actual.cat;
+      delete conf.cat;
+      cont.innerHTML=garmentFieldsHTML({...actual,cat,colors:actual.color?[actual.color]:[]},conf,pre);
+      enlaza();
+    };
+    const enlaza=()=>{
+      const c=cont.querySelector('#'+pre+'cat'); if(c)c.onchange=repinta;
+      cont.querySelectorAll('[data-ctxv]').forEach(btn=>btn.onclick=()=>{
+        haptic();
+        const x=cont.querySelector('#'+pre+'ctx'); if(!x)return;
+        x.value=btn.dataset.ctxv; x.dataset.confirmado='1';
+        repinta();
+      });
+      // La marca se normaliza al salir del campo: así se ve «Autry» antes de
+      // guardar, no después, y se puede corregir si no era eso.
+      const b=cont.querySelector('#'+pre+'brand');
+      if(b)b.onblur=()=>{ const v=canonMarca(b.value); if(v&&v!==b.value.trim())b.value=v; };
+    };
+    enlaza();
+  });
+}
+
+function readForm(scope){ return readFormPrefixed(scope,'f_'); }
+
+/* ═══════════════════════════════════════════
+   IA — RECONOCIMIENTO
+═══════════════════════════════════════════ */
+async function imageToBase64(file,maxDim=1152,quality=0.85,forceImg=false){
+  if(!file) throw new Error('No hay archivo.');
+  if(!/^image\//.test(file.type) && !/\.(jpe?g|png|heic|heif|webp)$/i.test(file.name||'')){
+    throw new Error('El archivo no es una imagen ('+(file.type||'desconocido')+').');
+  }
+  // 1) createImageBitmap: la vía que maneja HEIC y EXIF en iOS
+  if(window.createImageBitmap&&!forceImg){
+    try{
+      let bitmap;
+      try{ bitmap=await createImageBitmap(file,{imageOrientation:'from-image'}); }
+      catch(_){ bitmap=await createImageBitmap(file); }
+      const out=bitmapToData(bitmap,maxDim,quality);
+      bitmap.close&&bitmap.close();
+      if(out) return out;
+    }catch(e){ /* sigue al fallback */ }
+  }
+  // 2) Fallback con <img> + FileReader (más compatible que objectURL en algunos iOS)
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    const to=setTimeout(()=>rej(new Error('La imagen tardó demasiado (¿muy pesada?). Prueba con otra.')),20000);
+    fr.onerror=()=>{ clearTimeout(to); rej(new Error('No se pudo leer el archivo.')); };
+    fr.onload=()=>{
+      const im=new Image();
+      im.onload=()=>{
+        clearTimeout(to);
+        try{ const out=bitmapToData(im,maxDim,quality); out?res(out):rej(new Error('No se pudo convertir la imagen.')); }
+        catch(err){ rej(err); }
+      };
+      im.onerror=()=>{ clearTimeout(to); rej(new Error('Formato de imagen no compatible. Prueba con JPG o PNG.')); };
+      im.src=fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+function bitmapToData(src,maxDim,quality=0.85){
+  const sw=src.width||src.naturalWidth, sh=src.height||src.naturalHeight;
+  if(!sw||!sh) return null;
+  const sc=Math.min(1,maxDim/Math.max(sw,sh));
+  const w=Math.max(1,Math.round(sw*sc)), h=Math.max(1,Math.round(sh*sc));
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const ctx=c.getContext('2d'); if(!ctx) return null;
+  ctx.drawImage(src,0,0,w,h);
+  let dataUrl;
+  try{ dataUrl=c.toDataURL('image/jpeg',quality); }catch(e){ return null; }
+  if(!dataUrl||dataUrl.length<100) return null;
+  return {media_type:'image/jpeg',data:dataUrl.split(',')[1],dataUrl,w,h};
+}
+/* La respuesta de la IA se lee con cuidado: algunos modelos anteponen su
+   razonamiento (<think>…</think>) o envuelven el JSON en texto. Y un fallo se
+   registra: antes `callAI` devolvía null en silencio y era imposible saber si
+   fallaba la red, la clave o el modelo (auditoría I23). Solo se reintenta
+   cuando tiene sentido: un 400 o un 413 no se arreglan repitiendo. */
+function extraerJSON(text){
+  let t=String(text||'').replace(/<think>[\s\S]*?<\/think>/gi,'').replace(/```json\s*/gi,'').replace(/```/g,'').trim();
+  try{ return JSON.parse(t); }catch(e){ /* puede venir con texto alrededor: se busca el objeto */ }
+  const i=t.indexOf('{'), j=t.lastIndexOf('}');
+  if(i>=0&&j>i){ try{ return JSON.parse(t.slice(i,j+1)); }catch(e){ /* no era JSON: se devuelve null abajo */ } }
+  return null;
+}
+let ultimoFalloIA=null;
+async function callAI(system,user,image=null,{intentos=2,timeout=25000}={}){
+  const body={system,user};
+  if(image)body.image={media_type:image.media_type,data:image.data};
+  for(let n=1;n<=intentos;n++){
+    const ctrl=new AbortController(); const tm=setTimeout(()=>ctrl.abort(),timeout);
+    try{
+      const r=await fetch('/api/ai',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:ctrl.signal});
+      clearTimeout(tm);
+      if(!r.ok){
+        let det=''; try{ det=(await r.json()).error||''; }catch(e){ det=''; }
+        ultimoFalloIA={status:r.status,detalle:det,imagen:!!image,at:Date.now()};
+        logError('callAI', new Error(`HTTP ${r.status}: ${det}`), {status:r.status});
+        if(r.status<500) return null;          // 4xx: repetir no lo arregla
+        continue;
+      }
+      const d=await r.json();
+      const out=extraerJSON(d.text);
+      if(out){ ultimoFalloIA=null; return out; }
+      ultimoFalloIA={status:200,detalle:'respuesta sin JSON',imagen:!!image,at:Date.now()};
+      logError('callAI', new Error('La IA respondió sin JSON válido'), {muestra:String(d.text||'').slice(0,120)});
+    }catch(e){
+      clearTimeout(tm);
+      ultimoFalloIA={status:0,detalle:e.name==='AbortError'?'tiempo agotado':e.message,imagen:!!image,at:Date.now()};
+      logError('callAI', e);
+    }
+  }
+  return null;
+}
+/* El prompt se construye con contexto del usuario: sus marcas y sus tallas.
+   Decirle al modelo "este usuario tiene Stone Island, Silbon y Levi's" sube
+   muchísimo el acierto al leer una etiqueta borrosa, porque deja de adivinar
+   entre todas las marcas del mundo y empieza a reconocer entre las suyas. */
+function marcasConocidas(){
+  try{
+    const P=tasteProfile();
+    const suyas=[...(P.topBrands||[]), ...(store.profile?.likedBrands||[])].map(canonMarca).filter(Boolean);
+    return [...new Set(suyas)].slice(0,12);
+  }catch(e){ return []; }
+}
+/* Antes el prompt le decía al modelo que ante una etiqueta dudosa las marcas
+   del usuario eran «MUCHO más probables». Era un bucle: marca favorita →
+   prompt → más prendas de esa marca → aún más favorita. Y contradecía la
+   regla 1 del propio prompt, «nunca inventes». Fuera (auditoría C20). Lo que
+   sí ayuda sin sesgar es saber qué MODELOS existen: reconocer una Gazelle por
+   su forma y sus tres bandas es leer, no adivinar. */
+const MODELOS_PROMPT=Object.entries(MODELOS.reduce((acc,m)=>{ (acc[m.marca]=acc[m.marca]||[]).push(m.modelo); return acc; },{}))
+  .map(([marca,lista])=>`${marca}: ${lista.join(', ')}`).join('; ');
+function visionSystem(){
+  return VISION_BASE
+    + `\n\nCATÁLOGO DE MARCAS (si lo que lees encaja con una de estas, escríbela EXACTAMENTE así; si no está en la lista, escribe lo que leas tal cual):\n${MARCAS_CATALOGO.join(', ')}.`
+    + `\n\nMODELOS QUE CONVIENE RECONOCER (escribe el modelo en 'model' exactamente así si lo reconoces): ${MODELOS_PROMPT}.`;
+}
+/* Muestra visual de cada color canónico. Una por cada entrada de COLORES —
+   antes había ocho para dieciséis, así que media paleta del armario salía en
+   blanco en el gráfico de Insights. Son tonos de tela, no de interfaz: el
+   blanco es roto y el negro no es #000, que en una miniatura parece un agujero. */
+const MUESTRA_COLOR={
+  'Blanco':'#F2F2EF','Negro':'#22232A','Gris':'#A9AEB6','Marino':'#2B3A5B','Azul':'#4A6FA5',
+  'Verde':'#4A7C59','Kaki/Oliva':'#6E6F45','Marrón':'#6E4B35','Beige':'#CBB79C','Crudo':'#E8E1D3',
+  'Rojo':'#9E3028','Amarillo':'#D6AE3C','Naranja':'#C96A2E','Rosa':'#D9A0AC','Morado':'#6B5183',
+  'Multicolor':'linear-gradient(135deg,#C96A2E,#4A6FA5,#4A7C59)','—':'#C6CAD1'
+};
+const MATERIALES_IA=['Algodón','Lino','Lana','Cachemira','Seda','Denim','Punto','Cuero','Ante','Poliéster','Nylon','Gore-Tex','Viscosa','Mezcla'];
+/* Lo que devuelve el modelo de visión pasa SIEMPRE por aquí antes de tocar el
+   formulario. Tres cosas que antes no se hacían:
+
+   1. La marca se resuelve contra el catálogo. El modelo escribía lo que leía
+      —"AUTRY MEDALIST", "NEWBALANCE", "adiddas"— y eso entraba tal cual como
+      nombre de marca. Para el motor de gustos, "Autry Medalist" y "Autry" son
+      dos marcas distintas que se reparten la afinidad.
+   2. Si 'brand' no cuadra con nada pero el texto literal que leyó ('brand_text')
+      sí, gana el texto literal: el modelo lee mejor de lo que interpreta.
+   3. El corte se borra donde no aplica, así no llega "Regular Fit" en unas
+      zapatillas solo porque el modelo rellenó el hueco por inercia. */
+function depurarVision(r){
+  if(!r||typeof r!=='object')return r;
+  /* Confianza siempre de 0 a 1. Llegaba a veces en porcentaje (0-100) y la app
+     pintaba «3000 %» y decía «alta confianza» (auditoría C19). Un campo con
+     valor pero sin confianza no cuenta como seguro. */
+  const c={}, src=(r.confidence&&typeof r.confidence==='object')?r.confidence:{};
+  for(const [k,v] of Object.entries(src)){ let n=Number(v); if(!Number.isFinite(n))continue; if(n>1)n=n/100; c[k]=Math.max(0,Math.min(1,n)); }
+  ['cat','brand','color','name'].forEach(k=>{ if(r[k]&&c[k]==null)c[k]=0.5; });
+  r.confidence=c;
+
+  // «detected:false» con campos rellenos: la IA dice que no ha visto nada y a
+  // la vez inventa. Se queda solo lo que se puede revisar a simple vista, y
+  // todo en dudoso (auditoría I21).
+  if(r.detected===false){
+    ['brand','brand_text','model','name','fit','material','pattern','size'].forEach(k=>{ r[k]=''; });
+    Object.keys(c).forEach(k=>{ c[k]=0; });
+  }
+  if(r.cat)r.cat=canonCat(r.cat)||r.cat;
+
+  /* La marca, y de dónde sale. Ya no se sube la confianza por encontrarla en
+     el catálogo: una lectura dudosa de «Manga» que se resolvía como Mango
+     pasaba de 0,45 a 0,80 y dejaba de preguntarse (auditoría C15). */
+  const porCampo=resolverMarca(r.brand), porTexto=resolverMarca(r.brand_text);
+  let brand='', estado='nada';
+  if(porCampo.via==='catalogo'){ brand=porCampo.marca; estado='leida'; }
+  else if(porTexto.via==='catalogo'){ brand=porTexto.marca; estado='leida'; }
+  else if(porCampo.via==='errata'||porTexto.via==='errata'){ brand=(porCampo.via==='errata'?porCampo:porTexto).marca; estado='probable'; }
+  else if(porCampo.via==='desconocida'){ brand=porCampo.marca; estado='probable'; }
+  else if(porTexto.via==='desconocida'){ brand=porTexto.marca; estado='probable'; }
+  // 'palabra' («Manga», «Closet») no es una marca leída: se descarta.
+
+  // El modelo, si se reconoce. Sin marca leída, el modelo la da como probable.
+  const modelo=buscarModelo([r.model,r.name,r.brand_text].filter(Boolean).join(' '),brand)
+            || (!brand?buscarModelo([r.model,r.name,r.brand_text].filter(Boolean).join(' ')):null);
+  if(modelo&&!brand){ brand=modelo.marca; estado='modelo'; }
+  r.modelo=modelo||null;
+  r.brand=brand; r.brandStatus=brand?estado:'nada';
+  if(estado!=='leida') c.brand=brand?Math.min(c.brand??0.5,0.6):0;
+
+  if(modelo){
+    const fam=FAMILIAS[modelo.familia];
+    if(!r.cat||grupoDeCat(r.cat)!==grupoDeCat(fam.cat)) r.cat=fam.cat;
+    if(!r.name) r.name=modelo.modelo+(r.color?' '+String(canonColor(r.color)).toLowerCase():'');
+    // Una Gazelle es de calle y una Pegasus de correr, diga lo que diga la IA.
+    r.context=fam.context; c.context=1;
+  }
+  if(r.fit&&!camposPrenda(r.cat).fit)r.fit='';
+  if(Array.isArray(r.items))r.items=r.items.map(depurarVision);
+  return r;
+}
+
+/* Punto de entrada para el panel de Diagnóstico y para las pruebas de navegador.
+   Solo funciones puras: nada que escriba, ni la sesión, ni el almacén. Existe
+   porque la catalogación es lo más difícil de verificar de toda la app —
+   depende de lo que devuelva un modelo — y sin poder llamarla desde fuera, la
+   única forma de probarla era sacar fotos a mano. */
+window.drobe = Object.freeze({ depurarVision, canonCat, canonMarca, camposPrenda, visionSystem, parseBusqueda, contextoDe, extraerJSON: (...a)=>extraerJSON(...a) });
+
+const VISION_BASE=`Eres un catalogador profesional de moda. Tu trabajo es identificar UNA prenda con precisión de ficha de producto.
+
+MÉTODO — hazlo en este orden, mentalmente, antes de responder:
+PASO 1. LEE TODO EL TEXTO que haya en la imagen, aunque esté torcido, borroso, del revés o muy pequeño. Mira específicamente: etiqueta interior del cuello, etiqueta de composición lateral, pecho, bolsillo, cintura, botones y remaches, cremalleras y sus tiradores, y —en calzado— la lengüeta, el talón, el lateral y la suela. Copia ese texto literal en 'brand_text', sin interpretarlo.
+PASO 2. DECIDE QUÉ ES por su forma: cómo se cierra, si tiene mangas y de qué largo, si tiene cuello y de qué tipo, si tiene suela. La forma manda sobre el texto.
+PASO 3. SOLO ENTONCES rellena el resto.
+
+REGLAS CRÍTICAS:
+1. Nunca inventes. Si no puedes determinarlo con seguridad, deja el campo vacío y baja la confianza. Un campo vacío es recuperable; uno inventado se queda para siempre.
+2. 'cat' es EXACTAMENTE uno de: ${CATS.join(', ')}.
+3. Distinguir bien el tipo es lo más importante de todo:
+   - CALZADO: si tiene suela, es calzado y nunca otra cosa. Dentro del calzado: Sneakers (zapatilla de calle, suela plana o de goma, estilo urbano o retro), Zapatillas running (malla técnica, suela gruesa con amortiguación visible, para correr), Zapatillas trail (tacos agresivos en la suela), Botas (caña por encima del tobillo), Botines (justo en el tobillo), Zapatos Oxford (piel, cordones, suela fina, vestir), Mocasines (piel, SIN cordones), Náuticos (piel, cordón lateral), Sandalias, Chanclas, Tacones, Bailarinas, Botas de fútbol (tacos).
+   - Camisa (se abotona por delante, cuello con tapeta) ≠ camiseta (se mete por la cabeza, sin botonadura) ≠ polo (botonadura corta).
+   - Jersey (tejido de punto) ≠ sudadera (felpa o rizo interior) ≠ hoodie (sudadera CON capucha).
+   - Bomber (elástico en puños y bajo) ≠ Blazer (solapas, estructurado) ≠ Abrigo (largo, lana) ≠ Parka (largo, técnico, con capucha) ≠ Plumífero (acolchado y relleno).
+   - Pantalón largo ≠ short. Vaquero (denim) ≠ Chino (algodón liso) ≠ Pantalón vestir.
+4. 'brand_text': el texto literal de marca que has leído, tal cual, aunque esté a medias ("AUT RY", "new balan"). 'brand': esa marca ya resuelta y bien escrita. Si no ves ningún texto ni logotipo reconocible, los dos vacíos y confianza 0 — NO deduzcas la marca por el estilo de la prenda.
+5. Si reconoces el MODELO (Autry Medalist, Samba, 574, Air Force 1, 501…), ponlo en 'model' y también al principio de 'name', y la marca sola en 'brand'. La marca nunca va dentro de 'name'. Los LOGOS cuentan como texto leído: las tres bandas de adidas, el swoosh de Nike, la N de New Balance, la franja de Puma, las rayas de Asics y Onitsuka. Si solo reconoces la silueta y no ves ningún logo ni texto, puedes poner el modelo, pero confidence.brand no puede pasar de 0.5.
+6. 'name': nombre corto y editorial EN ESPAÑOL, como en un catálogo (ej. "Camisa de lino crudo", "Vaquero recto lavado medio", "Medalist blancas de piel").
+7. 'color' es EXACTAMENTE uno de: ${COLORES.join(', ')}. Nada de "azul marino oscuro" ni "off-white": elige el más cercano. 'colors' son los de la lista que aparezcan, el principal primero.
+8. 'material' es EXACTAMENTE uno de: ${MATERIALES_IA.join(', ')}, solo si la textura lo delata. Si no se ve, "".
+9. 'pattern': "Liso" si es de un color plano, "Estampado" si lleva dibujo, flores, camuflaje o gráfico grande, "Rayas", "Cuadros", "Logo" si el logotipo es el protagonista. Ante la duda, "Liso".
+10. 'fit' SOLO tiene sentido en ropa, nunca en calzado ni en accesorios: en esos casos, "". En pantalones usa Slim, Straight, Regular, Tapered, Wide Leg, Cargo, Skinny o Flare. En la parte de arriba, Regular, Slim, Oversized, Boxy o Cropped.
+11. 'size': solo si lees la talla en una etiqueta. En calzado es el número europeo.
+12. Confianza 0.0–1.0 por campo. Menos de 0.75 = la app preguntará. SÉ HONESTO: una confianza inflada es peor que una baja, porque la app deja de preguntar y guarda un dato falso.
+13. 'context': "deporte" si es prenda técnica de practicar deporte (maillot, culotte, mallas de running, camiseta técnica, zapatillas de correr, bañador de competición, neopreno…), si no "calle". Unas zapatillas retro de calle NO son deporte aunque la marca sea deportiva. Si es deporte, 'sport' es una de: Run, Ciclismo, Natación, Gym, Pádel/Tenis, Fútbol, Outdoor.
+14. Responde SOLO JSON válido, sin texto alrededor.
+{"detected":true,"garment_count":1,"cat":"","brand":"","brand_text":"","model":"","name":"","fit":"","color":"","colors":[],"material":"","pattern":"Liso","size":"","season":"","formality":"","context":"calle","sport":"","confidence":{"cat":0,"brand":0,"name":0,"fit":0,"color":0,"material":0,"pattern":0}}
+IMPORTANTE: si en la foto hay VARIAS prendas distintas (armario abierto, ropa sobre la cama, varias perchas), pon garment_count con el total real y añade "items": un array con un objeto por prenda (mismos campos). Máximo 6. Solo prendas que se vean con claridad.`;
+
+const EMAIL_SYSTEM=`Eres un extractor de precisión de emails de confirmación de compra de moda (Zara, Mango, ASOS, Zalando, El Corte Inglés, Nike…).
+REGLAS:
+- No inventes. Si un dato no aparece, déjalo vacío y baja la confianza (0-1).
+- SOLO prendas y calzado: ignora envío, impuestos, descuentos globales y tarjetas regalo.
+- "store": la tienda/marca que envía el email. "dateISO": fecha del pedido en AAAA-MM-DD.
+- Por prenda: "name" (descripción limpia en español), "brand" (si difiere de la tienda), "size" (talla si aparece), "color" (en español si aparece), "price" (precio final de línea), "cat" en español, uno de: ${CATS_DETAIL.join(', ')}.
+Responde SOLO JSON: {"store":"","dateISO":"","total":0,"items":[{"name":"","brand":"","size":"","color":"","price":0,"cat":"","confidence":0}]}`;
+
+const TICKET_SYSTEM=`Eres un sistema OCR de precisión especializado en tickets de tiendas de moda.
+REGLAS:
+- No inventes. Si un dato no se lee con claridad, baja la confianza (0-1) y deja el campo vacío.
+- SOLO prendas y calzado: ignora líneas de bolsas, arreglos, envío, impuestos, redondeos o tarjetas regalo.
+- "cat" DEBE estar en español y ser uno de: ${CATS_DETAIL.join(', ')}. Traduce del inglés si hace falta: T-SHIRT→Camiseta manga corta, PANTS/TROUSERS→Pantalón vestir, LINEN TROUSERS→Pantalón lino, JEANS→Vaquero, CHINO→Chino, SHIRT→Camisa Oxford, SWEATER/KNIT→Jersey, HOODIE→Hoodie, JACKET→Bomber, COAT→Abrigo, SHOES/SNEAKERS→Sneakers, SHORTS→Shorts. Fíjate en la descripción completa para no confundir camiseta con camisa, ni pantalón con short.
+- "brand": la marca de la prenda si la línea la nombra. Si encaja con una del catálogo, escríbela EXACTAMENTE así: ${MARCAS_CATALOGO.join(', ')}. El nombre del MODELO no es la marca: en "AUTRY MEDALIST 42" la marca es Autry y el modelo va en "name".
+- "name": descripción de la línea del ticket limpia y legible en español.
+- "dateISO" en formato AAAA-MM-DD si puedes deducirla (los tickets españoles suelen usar DD/MM/AAAA).
+- "sku" es el número de referencia/artículo si aparece.
+- "price": precio final de la línea (con descuento aplicado si lo hay).
+Responde SOLO JSON: {"store":"","date":"","dateISO":"","total":0,"items":[{"name":"","brand":"","sku":"","price":0,"cat":"","confidence":0}]}`;
+
+/* ═══════════════════════════════════════════
+   ROUTER
+═══════════════════════════════════════════ */
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+let route='armario', wardMode=IS_IOS?'grid':'3d', gridFilter='Todo', wardQuery='', wardContext='calle', fichaId=null, addMode='choose';
+
+/* Cómo se ve el armario: densidad y orden. Va en `store.profile`, que es por
+   usuario y viaja a la nube, en vez de en una clave suelta de localStorage —
+   así no se queda pegado al dispositivo ni sobrevive a un cambio de cuenta. */
+const ORDENES=[
+  ['reciente','Añadidas'],
+  ['color','Por color'],
+  ['olvidadas','Sin usar'],
+  ['usadas','Más usadas'],
+  ['valor','Más caras']
+];
+const vistaArmario=()=>{
+  const v=(store.profile&&store.profile.wardView)||{};
+  return {densidad:[1,2,3].includes(+v.densidad)?+v.densidad:2, orden:ORDENES.some(o=>o[0]===v.orden)?v.orden:'reciente'};
+};
+const guardarVista=parcial=>{
+  store.profile=store.profile||{};
+  store.profile.wardView={...vistaArmario(),...parcial};
+  // Solo local a propósito: `profiles` no tiene columna para esto y Supabase se
+  // come en silencio una escritura a una columna que no existe. Es una
+  // preferencia de vista, no un dato del usuario — vive donde vive el armario.
+  save();
+};
+/* Orden del mosaico. «Sin usar» primero es la petición que más se repite en las
+   reseñas de toda la categoría y que no tiene ninguna competidora: poder ver de
+   un vistazo lo que llevas meses sin tocar. */
+function ordenarArmario(lista,orden){
+  const l=[...lista];
+  /* Sin estrenar (worn 0) va lo primero. Después, lo que lleva más tiempo sin
+     usarse. Las prendas de antes de que se guardara `lastWornAt` solo tienen el
+     texto viejo ("Hace 4 días"), así que se colocan por número de puestas en
+     vez de fingir que no se han usado nunca. */
+  const desde=g=>{
+    if(!(+g.worn))return -1;                       // nunca puesta: lo primero
+    if(g.lastWornAt){ const t=Date.parse(g.lastWornAt); if(Number.isFinite(t))return t; }
+    return 0;                                      // fecha desconocida
+  };
+  const iColor=g=>{ const i=COLORES.indexOf(canonColor(g.color)); return i<0?99:i; };
+  if(orden==='color')     return l.sort((a,b)=>iColor(a)-iColor(b)||(b.worn||0)-(a.worn||0));
+  if(orden==='olvidadas') return l.sort((a,b)=>desde(a)-desde(b)||(a.worn||0)-(b.worn||0));
+  if(orden==='usadas')    return l.sort((a,b)=>(b.worn||0)-(a.worn||0));
+  if(orden==='valor')     return l.sort((a,b)=>(b.price||0)-(a.price||0));
+  return l;   // 'reciente': el orden natural del almacén, que ya es el de alta
+}
+const app=document.getElementById('app');
+const TABS=[
+  {k:'armario',i:'shirt',l:'Armario'},
+  {k:'estilista',i:'spark',l:'Estilista'},
+  {k:'add',i:'add',l:''},
+  {k:'insights',i:'chart',l:'Insights'},
+  {k:'perfil',i:'user',l:'Perfil'}
+];
+function go(r){ if(r!==route)unmountWardrobe3D(); if(r==='add')addMode='choose'; route=r; render(); window.scrollTo(0,0); try{ sincronizaHistorial(); }catch(e){ /* antes de arrancar, aún no existe */ } }
+function render(){
+  app.innerHTML=`<div class="shell">
+    <div class="top">${wordmark(21)}
+      <div style="display:flex;gap:8px">
+        <button class="ico" id="top_social" aria-label="Comunidad" style="position:relative">${svg('people',19)}<span class="unread-dot" id="unread_dot" style="display:none"></span></button>
+        <button class="ico" aria-label="Notificaciones">${svg('bell',19)}</button>
+      </div>
+    </div>
+    <main id="main" class="fade"></main>
+    <div class="nav"><div class="nav-in">
+      ${TABS.map(t=>{ const on=route===t.k,add=t.k==='add';
+        return `<button data-t="${t.k}" class="${on?'on':''}">${add?`<span class="add">${svg('add',22,2)}</span>`:svg(t.i,21)+`<span class="lbl">${t.l}</span>`}</button>`;}).join('')}
+    </div></div></div>`;
+  const m=document.getElementById('main');
+  /* Si una vista revienta, antes te quedabas con la pantalla en blanco y la
+     navegación muerta. Ahora la pestaña falla sola, lo dice, y el resto de la
+     app sigue usable. */
+  try{
+    ({armario:vArmario,estilista:vEstilista,add:vAdd,insights:vInsights,perfil:vPerfil}[route]||vArmario)(m);
+  }catch(e){
+    logError('vista:'+route, e, {fatal:true});
+    m.innerHTML=`<div class="reveal" style="padding:40px 0">
+      <div class="title" style="font-size:26px">Esta pantalla ha fallado</div>
+      <div class="sub">El resto de la app sigue funcionando. El detalle está guardado en Perfil → Diagnóstico.</div>
+      <button class="btn dark" id="verr" style="margin-top:18px">Reintentar</button>
+      <button class="btn ghost" id="verrh" style="margin-top:8px">Ir al armario</button>
+    </div>`;
+    m.querySelector('#verr').onclick=()=>render();
+    m.querySelector('#verrh').onclick=()=>go('armario');
+  }
+  app.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>go(b.dataset.t));
+  const social=document.getElementById('top_social'); if(social)social.onclick=()=>openSocial();
+  if(session)refreshUnread();
+  if(fichaId)renderFicha();
+}
+
+/* ═══════════════════════════════════════════
+   ARMARIO
+═══════════════════════════════════════════ */
+function vArmario(m){
+  /* PRIMER MINUTO. Con el armario vacío la pantalla enseñaba un titular
+     ("Hoy te queda bien lo sencillo") sobre la nada, sin foto, sin prendas y
+     sin decirte qué hacer. Ahora hay un arranque de verdad: qué es esto, qué
+     gano, y un solo botón. */
+  const total=store.garments.length;
+  if(total===0){
+    m.innerHTML=`<div class="reveal first-run">
+      <div class="fr-mark">${dmark(54)}</div>
+      <div class="title" style="font-size:34px;margin-top:20px">Tu armario<br>está vacío</div>
+      <div class="sub" style="max-width:22em">Añade unas cuantas prendas y Drobe empieza a entender cómo vistes: tus marcas, tus colores, lo que pagas por cada cosa.</div>
+      <div class="fr-steps">
+        ${[['cam','Haz una foto','La IA rellena marca, tipo, color y material'],
+           ['receipt','Escanea un ticket','Varias prendas de golpe, con su precio real'],
+           ['pen','Añádela a mano','Si prefieres control total']]
+          .map(([i,t,d])=>`<div class="fr-step"><span class="fr-ico">${svg(i,19)}</span><div><div class="fr-t">${t}</div><div class="fr-d">${d}</div></div></div>`).join('')}
+      </div>
+      <button class="btn dark" id="fr_go" style="margin-top:22px">${svg('add',18,2)} Añadir mi primera prenda</button>
+      <div class="fr-note">Con diez prendas ya acierta. Con treinta, afina de verdad.</div>
+    </div>`;
+    m.querySelector('#fr_go').onclick=()=>go('add');
+    return;
+  }
+  const look=pickOutfit();
+  m.innerHTML=`<div class="reveal">
+    <div class="eyebrow">${WEATHER.city}${WEATHER.temp!=null?` · ${WEATHER.temp}°`:''}</div>
+    <div class="title">Hoy te queda<br>bien lo sencillo</div></div>
+    ${look.length?`<div class="hero-look reveal" style="animation-delay:.05s" id="herolook">
+      <div class="hl-ph">${look[0].img?`<img src="${look[0].img}"/>`:''}</div>
+      <div class="hl-text"><div class="hl-b">${look.map(g=>g.brand).join(' · ')}</div><div class="hl-n">${look.map(g=>g.name).join(' + ')}</div></div>
+    </div>`:''}
+    <div class="wardtop reveal" style="margin-top:18px">
+      <div class="viewseg">
+        ${['3d','grid'].map(x=>`<button data-mode="${x}" class="${wardMode===x?'on':''}">${x==='3d'?'3D':'Cuadrícula'}</button>`).join('')}
+      </div>
+      <div class="viewseg ctxseg">
+        <button class="vseg ${wardContext==='calle'?'on':''}" data-ctx="calle">${svg('hanger',15)}<span>Calle</span></button>
+        <button class="vseg ${wardContext==='deporte'?'on':''}" data-ctx="deporte">${svg('spark',15)}<span>Deporte</span></button>
+      </div>
+      ${wardMode==='grid'?`<button class="ico wsbtn ${wardQuery?'on':''}" id="wsopen" aria-label="Buscar en el armario">${svg('search',18)}</button>`:''}
+    </div>
+    ${avisoContextoHTML()}
+    <div id="ward"></div>`;
+  m.querySelector('#ctxfix')?.addEventListener('click',()=>revisarContextos(()=>vArmario(m)));
+  m.querySelectorAll('[data-ctx]').forEach(b=>b.onclick=()=>{ if(wardContext!==b.dataset.ctx){wardContext=b.dataset.ctx;gridFilter='Todo';vArmario(m);} });
+  m.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{ if(wardMode!==b.dataset.mode){unmountWardrobe3D();wardMode=b.dataset.mode;vArmario(m);} });
+  const hl=m.querySelector('#herolook'); if(hl)hl.onclick=()=>openFicha(look[0].id);
+  const ward=m.querySelector('#ward');
+  if(wardMode==='3d'){
+    ward.innerHTML=`<div class="stage3d" id="stage"><div class="hint">Cargando vestidor 3D…</div></div><div class="wardcap" id="wardcap"></div>`;
+    load3D().then(mod=>{
+      if(!mod||!mod.mountWardrobe3D){ wardMode='grid'; vArmario(m); return; }
+      try{
+        // El 3D enseñaba el armario entero aunque arriba pusiera «Deporte»: el
+        // interruptor solo filtraba la cuadrícula.
+        const enCtx=store.garments.filter(g=>(g.context||'calle')===wardContext);
+        if(!enCtx.length){ wardMode='grid'; vArmario(m); return; }
+        mod.mountWardrobe3D(ward.querySelector('#stage'),enCtx,{
+          onSelect:it=>openFicha(it.id),
+          onFocus:it=>{ const c=document.getElementById('wardcap'); if(c)c.innerHTML=`<div class="wc-b">${it.brand}</div><div class="wc-n">${it.name}</div>`; }
+        });
+        const h=ward.querySelector('.hint'); if(h)h.textContent='Desliza para pasar · toca el centro para abrir';
+      }catch(e){ wardMode='grid'; vArmario(m); }
+    });
+  } else {
+    const inCtx=g=>(g.context||'calle')===wardContext;
+    const ctxGarments=store.garments.filter(inCtx);
+    const cats=wardContext==='deporte'
+      ?['Todo',...new Set(ctxGarments.map(g=>g.sport).filter(Boolean))]
+      :['Todo','En venta',...new Set(ctxGarments.map(g=>g.catGroup||g.cat))];
+    if(!cats.includes(gridFilter))gridFilter='Todo';
+    const norm=s=>(s||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const matchQ=g=>{
+      if(!wardQuery)return true;
+      const q=norm(wardQuery);
+      return [g.brand,g.name,g.cat,g.catGroup,g.color,(g.colors||[]).join(' '),g.material,g.size,g.store,g.sport].some(v=>norm(v).includes(q));
+    };
+    const vista=vistaArmario();
+    const filterList=()=>ordenarArmario(ctxGarments
+      .filter(g=>gridFilter==='Todo'?true:gridFilter==='En venta'?g.status==='venta':wardContext==='deporte'?g.sport===gridFilter:(g.catGroup||g.cat)===gridFilter)
+      .filter(matchQ), vista.orden);
+    const kmBadge=g=>{
+      if(wardContext!=='deporte'||g.km==null)return '';
+      const warn=g.km>=600;
+      return `<span class="tag ${warn?'sale':''}" style="top:auto;bottom:10px">${Math.round(g.km)} km${warn?' · renovar':''}</span>`;
+    };
+    /* El pie de la tarjeta enseña el dato por el que estás ordenando. Ordenar
+       por «Sin usar» y no ver cuánto hace que no te la pones es enseñar el
+       orden y esconder el motivo. */
+    const apunte=g=>{
+      // "Sin estrenar" solo si de verdad no se ha puesto nunca. Con puestas
+      // registradas pero sin fecha (datos de antes), se enseña el texto viejo.
+      if(vista.orden==='olvidadas')
+        return !(+g.worn) ? 'Sin estrenar'
+             : g.lastWornAt ? esc(fmtDesde(g.lastWornAt))
+             : (g.lastWorn&&g.lastWorn!=='—' ? esc(g.lastWorn) : '');
+      if(vista.orden==='usadas')   return `${g.worn||0} ${(g.worn||0)===1?'puesta':'puestas'}`;
+      if(vista.orden==='valor')    return g.price?`${Math.round(g.price)}€`:'';
+      return '';
+    };
+    const gridHTML=list=>list.length
+      ?list.map((g,i)=>{
+        const ap=apunte(g);
+        const muestra=MUESTRA_COLOR[canonColor(g.color)]||'';
+        const pie=`<div class="cap"><div class="b">${muestra?`<i class="sw" style="background:${muestra}"></i>`:''}${esc(g.brand)}</div><div class="n">${esc(g.name)}</div><div class="m">${wardContext==='deporte'&&g.sport?esc(g.sport)+' · ':''}${esc(g.cat)}${g.size?' · '+esc(g.size):''}</div></div>`;
+        return `<div class="gcard reveal" data-g="${esc(g.id)}" style="animation-delay:${Math.min(i,14)*0.035}s">
+        <div class="ph"><img loading="lazy" decoding="async" src="${esc(g.img)}" alt="${esc([g.brand,g.name].filter(Boolean).join(' '))}"/>${g.status==='venta'?'<span class="tag sale">En venta</span>':''}${kmBadge(g)}${ap?`<span class="gnote">${ap}</span>`:''}${pie}</div>
+        ${pie}</div>`;
+      }).join('')
+      :`<div class="ward-empty">${svg('search',22)}<div>${
+          wardQuery
+            ? `Nada que encaje con «${esc(wardQuery)}»<br><span class="we-hint">Prueba con la marca, el color o el tipo de prenda.</span>`
+            : wardContext==='deporte'
+              ? 'Aún no tienes prendas deportivas.<br><span class="we-hint">Al escanear un maillot o unas zapatillas, Drobe las clasifica solas.</span>'
+              : gridFilter && gridFilter!=='Todo'
+                ? `No tienes nada en «${esc(gridFilter)}».<br><span class="we-hint">Toca «Todo» para ver el armario entero.</span>`
+                : 'Nada por aquí.'
+        }</div></div>`;
+    ward.innerHTML=`
+      <div class="ward-search${wardQuery?'':' oculta'}" style="margin-top:14px"><span class="ws-ico">${svg('search',17)}</span><input id="wq" placeholder="Marca, color, tipo, talla…" value="${esc(wardQuery)}" autocapitalize="off" autocorrect="off"/>${wardQuery?`<button class="ws-clear" id="wqc" aria-label="Limpiar">✕</button>`:''}</div>
+      <div class="chips" style="margin-top:12px">${cats.map(c=>`<button class="chip ${gridFilter===c?'on':''}" data-f="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      <div class="wardbar">
+        <div class="chips ordchips">${ORDENES.map(([k,l])=>`<button class="chip sm ${vista.orden===k?'on':''}" data-ord="${k}">${l}</button>`).join('')}</div>
+        <div class="dens" role="group" aria-label="Tamaño de las prendas">
+          ${[[3,'Mosaico'],[2,'Medio'],[1,'Grande']].map(([n,l])=>`<button class="${vista.densidad===n?'on':''}" data-dens="${n}" aria-label="${l}" aria-pressed="${vista.densidad===n}">${svg(n===3?'grid3':n===2?'grid2':'grid1',15)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="grid d${vista.densidad}" id="wgrid">${gridHTML(filterList())}</div>`;
+    /* La búsqueda ocupaba una fila entera siempre, usándose casi nunca. Ahora
+       es un icono en la barra y se despliega al tocarlo. */
+    const wsb=m.querySelector('#wsopen'), wsWrap=ward.querySelector('.ward-search');
+    if(wsb&&wsWrap)wsb.onclick=()=>{
+      const abierta=!wsWrap.classList.contains('oculta');
+      if(abierta&&!wardQuery){ wsWrap.classList.add('oculta'); wsb.classList.remove('on'); }
+      else { wsWrap.classList.remove('oculta'); wsb.classList.add('on'); wsWrap.querySelector('input')?.focus(); }
+    };
+    const grid=ward.querySelector('#wgrid');
+    const bindCards=()=>grid.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>openFicha(b.dataset.g));
+    bindCards();
+    ward.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{gridFilter=b.dataset.f;vArmario(m);});
+    ward.querySelectorAll('[data-ord]').forEach(b=>b.onclick=()=>{ haptic(); guardarVista({orden:b.dataset.ord}); vArmario(m); });
+    ward.querySelectorAll('[data-dens]').forEach(b=>b.onclick=()=>{
+      haptic(); const n=+b.dataset.dens;
+      // Cambiar la densidad no debe repintar la vista entera: se anima la
+      // rejilla y las prendas recolocan solas. Repintar mataba la sensación.
+      guardarVista({densidad:n});
+      grid.className='grid d'+n;
+      ward.querySelectorAll('[data-dens]').forEach(x=>{const on=+x.dataset.dens===n;x.classList.toggle('on',on);x.setAttribute('aria-pressed',on);});
+    });
+    const wq=ward.querySelector('#wq');
+    wq.oninput=()=>{ wardQuery=wq.value.trim(); grid.innerHTML=gridHTML(filterList()); bindCards();
+      const c=ward.querySelector('#wqc'); if(wardQuery&&!c){const btn=document.createElement('button');btn.className='ws-clear';btn.id='wqc';btn.setAttribute('aria-label','Limpiar');btn.textContent='✕';btn.onclick=()=>{wardQuery='';vArmario(m);};ward.querySelector('.ward-search').appendChild(btn);} else if(!wardQuery&&c)c.remove(); };
+    const wqc=ward.querySelector('#wqc'); if(wqc)wqc.onclick=()=>{wardQuery='';vArmario(m);};
+  }
+}
+
+/* ═══ PRENDAS EN LA CUADRÍCULA EQUIVOCADA ═══
+   Las prendas de antes de que se preguntara «¿Dónde la usas?» entraron todas
+   como calle. Aquí se detectan las que CLARAMENTE no lo son (unas mallas, una
+   Pegasus, un maillot de Gobik) y se ofrecen para mover de una vez. Solo las
+   seguras: las dudosas no se tocan, y lo que el usuario decida se respeta. */
+function prendasMalColocadas(){
+  const out=[];
+  store.garments.forEach(g=>{
+    if(g.contextoConfirmado||g.status==='venta')return;
+    let cd; try{ cd=contextoDe(g); }catch(e){ return; }
+    if(cd.seguro&&cd.context!==(g.context||'calle')) out.push({g,sugerido:cd.context,motivo:cd.motivo});
+  });
+  return out;
+}
+function avisoContextoHTML(){
+  const mal=prendasMalColocadas();
+  if(!mal.length)return '';
+  const aDep=mal.filter(x=>x.sugerido==='deporte').length, aCalle=mal.length-aDep;
+  const txt=aDep&&aCalle?`${mal.length} prendas parecen estar en la sección equivocada`
+    :aDep?`${aDep} ${aDep===1?'prenda de calle parece':'prendas de calle parecen'} de deporte`
+    :`${aCalle} ${aCalle===1?'prenda de deporte parece':'prendas de deporte parecen'} de calle`;
+  return `<button class="ctxfix reveal" id="ctxfix">${svg('spark',16)}<span>${txt}</span><b>Revisar</b></button>`;
+}
+function revisarContextos(despues){
+  const mal=prendasMalColocadas(); if(!mal.length)return;
+  const eleccion={}; mal.forEach(x=>{ eleccion[x.g.id]=x.sugerido; });
+  const ov=document.createElement('div'); ov.className='sheet-ov';
+  const pinta=()=>{ ov.innerHTML=`<div class="sheet">
+    <div class="sheet-bar"></div>
+    <div class="sheet-t">¿Calle o deporte?</div>
+    <div class="sub" style="margin:-6px 0 14px">Estas prendas están en una sección que no parece la suya. Marcado, lo que creo; toca para cambiarlo.</div>
+    <div class="ctxrev">${mal.map(x=>`<div class="ctxrev-r">
+      <div class="dup-ph">${x.g.img?`<img src="${esc(x.g.img)}" alt=""/>`:svg('shirt',20)}</div>
+      <div class="dup-info"><div class="dup-n">${esc([x.g.brand,x.g.name].filter(Boolean).join(' · ')||x.g.cat)}</div><div class="dup-m">${esc(x.motivo)}</div></div>
+      <div class="ctxrev-b">${['calle','deporte'].map(v=>`<button class="${eleccion[x.g.id]===v?'on':''}" data-id="${esc(x.g.id)}" data-v="${v}">${v==='calle'?'Calle':'Deporte'}</button>`).join('')}</div>
+    </div>`).join('')}</div>
+    <button class="btn dark" id="ctx_ok" style="margin-top:16px">Guardar</button>
+    <button class="btn ghost" id="ctx_no" style="margin-top:8px">Dejarlas como están</button>
+  </div>`;
+    ov.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>{ haptic(); eleccion[b.dataset.id]=b.dataset.v; pinta(); ov.classList.add('show'); });
+    ov.querySelector('#ctx_ok').onclick=()=>aplica(true);
+    ov.querySelector('#ctx_no').onclick=()=>aplica(false);
+  };
+  const aplica=mover=>{
+    mal.forEach(x=>{
+      const g=findG(x.g.id); if(!g)return;
+      if(mover){ g.context=eleccion[g.id]; if(g.context!=='deporte')g.sport=''; }
+      g.contextoConfirmado=true;              // lo que el usuario ha visto, no se vuelve a preguntar
+      if(session)cloud.pushGarment(g);
+    });
+    save(); cerrar();
+    if(mover)toast('Listo: cada prenda en su sitio');
+    despues&&despues();
+  };
+  const cerrar=()=>{ ov.classList.remove('show'); setTimeout(()=>ov.remove(),300); };
+  ov.onclick=e=>{ if(e.target===ov)cerrar(); };
+  pinta();
+  document.body.appendChild(ov);
+  requestAnimationFrame(()=>ov.classList.add('show'));
+}
+
+/* ═══════════════════════════════════════════
+   FICHA
+═══════════════════════════════════════════ */
+/* Al abrir una prenda, su foto CRECE hasta la ficha en vez de aparecer una
+   pantalla nueva encima. Es la misma imagen moviéndose, no dos imágenes: el
+   navegador lo hace solo con View Transitions, dándole el mismo nombre a la
+   foto de la tarjeta y a la de la ficha. Donde no está soportado (Firefox, iOS
+   antiguo) se abre como siempre — no se degrada a nada roto. */
+function openFicha(id){
+  fichaId=id;
+  const tarjeta=document.querySelector(`.gcard[data-g="${(window.CSS&&CSS.escape)?CSS.escape(id):id}"] .ph img`);
+  if(!tarjeta || typeof document.startViewTransition!=='function'){ renderFicha(); return; }
+  tarjeta.style.viewTransitionName='prenda-abierta';
+  document.documentElement.classList.add('vt-prenda');
+  let t;
+  // Un nombre de transición tiene que ser único en cada instantánea. La foto
+  // de la tarjeta sigue en el DOM debajo de la ficha, así que hay que
+  // quitárselo ANTES de dárselo a la de la ficha: si no, el navegador ve dos
+  // «prenda-abierta», avisa de nombre duplicado y se salta la animación.
+  document.querySelectorAll('.ficha-hero .track img').forEach(i=>{ i.style.viewTransitionName=''; });
+  try{ t=document.startViewTransition(()=>{
+    tarjeta.style.viewTransitionName='';
+    renderFicha();
+    const hero=document.querySelector('#ficha .ficha-hero .track img');
+    if(hero)hero.style.viewTransitionName='prenda-abierta';
+  }); }
+  catch(e){ tarjeta.style.viewTransitionName=''; document.documentElement.classList.remove('vt-prenda'); renderFicha(); return; }
+  const limpiar=()=>{
+    tarjeta.style.viewTransitionName='';
+    const hero=document.querySelector('#ficha .ficha-hero .track img');
+    if(hero)hero.style.viewTransitionName='';
+    document.documentElement.classList.remove('vt-prenda');
+  };
+  t.finished.then(limpiar,limpiar);
+}
+function closeFicha(){ fichaId=null; const f=document.getElementById('ficha'); if(f){f.style.animation='fade .25s var(--ease) reverse';setTimeout(()=>f.remove(),200);} if(route==='armario'&&wardMode==='3d')resetView(); }
+function compatList(g){
+  return store.garments.filter(x=>x.id!==g.id).map(x=>{
+    let s=62;
+    if(NEUTRAL_COLORS.includes(x.color))s+=14;
+    if((x.catGroup||x.cat)!==(g.catGroup||g.cat))s+=12;
+    if(x.formality===g.formality)s+=8;
+    if(x.season===g.season||x.season==='Todo el año'||g.season==='Todo el año')s+=6;
+    return {g:x,pct:Math.min(s,98)};
+  }).sort((a,b)=>b.pct-a.pct).slice(0,5);
+}
+function renderFicha(){
+  const g=findG(fichaId); if(!g){fichaId=null;return;}
+  const old=document.getElementById('ficha'); if(old)old.remove();
+  const photos=[g.img,...(g.photos||[])].filter(Boolean);
+  const onSale=g.status==='venta';
+  const el=document.createElement('div'); el.className='ficha'; el.id='ficha';
+  el.innerHTML=`
+    <div class="ficha-hero">
+      <button class="ficha-close" id="fclose" aria-label="Cerrar">${svg('back',20)}</button>
+      <button class="ficha-edit" id="fedit" aria-label="Editar prenda">${svg('pen',18)}</button>
+      ${photos.length<4?`<button class="ficha-edit faddph" id="faddph" aria-label="Añadir foto">${svg('camera',18)}</button>`:''}
+      <div class="track" id="track">${photos.map(p=>`<img src="${p}"/>`).join('')}</div>
+      <div class="ficha-overlay"><div class="ficha-b">${g.brand}</div><div class="ficha-n">${g.name}</div></div>
+      ${photos.length>1?`<div class="ficha-dots">${photos.map((_,i)=>`<i class="${i===0?'on':''}"></i>`).join('')}</div>`:''}
+    </div>
+    <div class="ficha-body">
+      <div class="ficha-row">
+        ${[g.cat,g.fit,g.season,g.formality].filter(Boolean).map(p=>`<span class="pill">${p}</span>`).join('')}
+        <span class="pill eco">${cpw(g).toFixed(2)} €/uso</span>
+      </div>
+      <div class="shead"><h2>Detalles</h2></div>
+      <div class="specs">
+        ${spec('Tipo',g.cat)}${spec('Corte',g.fit)}
+        ${spec('Color',(g.colors||[g.color]).join(' · '))}${spec('Material',g.material)}
+        ${spec('Talla',g.size||'—')}${spec('Estado',g.cond)}
+        ${spec('Comprada',g.bought)}${spec('Tienda',g.store||'—')}
+        ${spec('Precio',(g.price||0).toFixed(2)+' €')}${spec('Veces usada',String(g.worn))}
+        ${spec('Última vez',ultimaVez(g))}${spec('Coste/uso',cpw(g).toFixed(2)+' €',true)}
+      </div>
+      <div class="shead"><h2>Combina con</h2></div>
+      <div class="compat">${compatList(g).map(c=>`<div class="it" data-c="${c.g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${c.g.img||''}"/></div><div class="pct">${c.pct}%</div></div>`).join('')}</div>
+      <div class="shead"><h2>Documentación</h2></div>
+      ${g.docs&&g.docs.length?g.docs.map(d=>`<div class="docrow"><span class="dico">${svg(d.icon||'file',20)}</span><div><div class="dn">${d.type}</div><div class="dt">${d.name} · ${d.dt}</div></div><span class="open">${svg('chev',18)}</span></div>`).join(''):'<div class="sub" style="margin:-2px 0 10px">Sin documentos. Añade el ticket o la garantía.</div>'}
+      <label class="docadd" for="docfile">${svg('add',18)} Añadir ticket, factura o garantía</label>
+      <input id="docfile" type="file" accept="image/*,application/pdf" hidden/>
+      <div style="height:14px"></div>
+      <button class="btn ${onSale?'ghost':'dark'}" id="sale" style="margin-bottom:10px">${svg('tag',18)} ${onSale?'Quitar de la venta':'Poner en venta · sugerido '+Math.round((g.price||0)*0.4)+' €'}</button>
+      ${onSale?`<div class="sell-box">
+        <div class="sell-title">${svg('tag',16)} Publicar anuncio</div>
+        <div class="sub" style="margin:4px 0 10px">Drobe prepara el anuncio. Tú das un toque para publicarlo.</div>
+        <button class="btn ghost sell-btn" id="sell_wallapop" style="margin-bottom:8px">Preparar para Wallapop</button>
+        <button class="btn ghost sell-btn" id="sell_vinted">Preparar para Vinted</button>
+      </div>`:''}
+      <button class="btn ghost" id="wear" style="margin-top:10px">${svg('check',18)} Marcar como usada hoy</button>
+      <button class="btn ghost" id="gdel" style="margin-top:10px;color:var(--danger)">${svg('trash',18)} Eliminar prenda</button>
+      <div class="fitfb">
+        <div class="fitfb-l">¿Cómo te queda${g.size?` la talla ${esc(g.size)}`:''}?</div>
+        <div class="fitfb-chips">${['Pequeña','Perfecta','Grande'].map(o=>`<button class="chip ${g.fitFeedback===o?'on':''}" data-ff="${o}">${o}</button>`).join('')}</div>
+      </div>
+      ${(g.context==='deporte')?`<div class="km-box">
+        <div class="km-head"><span>Kilometraje${g.stravaGear?' · Strava':''}</span>${g.km>=600?`<span class="km-warn">${svg('spark',12)} Zona de renovación</span>`:''}</div>
+        <div class="km-row">
+          <input id="km_in" inputmode="numeric" value="${g.km!=null?Math.round(g.km):''}" placeholder="0"/>
+          <span class="km-unit">km</span>
+          ${[5,10,21].map(k=>`<button class="chip" data-km="${k}">+${k}</button>`).join('')}
+        </div>
+      </div>`:''}
+    </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#fclose').onclick=closeFicha;
+  el.querySelector('#fedit').onclick=()=>editGarment(g);
+  const addPh=el.querySelector('#faddph');
+  if(addPh){
+    const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true; inp.style.display='none';
+    el.appendChild(inp);
+    addPh.onclick=()=>inp.click();
+    inp.onchange=async(e)=>{
+      const files=[...(e.target.files||[])]; if(!files.length)return;
+      addPh.innerHTML=svg('load',18); addPh.querySelector('svg')?.classList.add('spin');
+      g.photos=g.photos||[];
+      for(const file of files){
+        if(1+g.photos.length>=4)break;
+        try{ const im=await imageToBase64(file,900,0.82); g.photos.push(im.dataUrl); }catch(err){ logError('ficha.addPhoto', err, {user:'No se pudo añadir esa foto. Prueba con otra.'}); }
+      }
+      save(); if(session)cloud.pushGarment(g);
+      haptic(); renderFicha();
+    };
+  }
+  const track=el.querySelector('#track'),dots=el.querySelectorAll('.ficha-dots i');
+  if(track&&dots.length)track.onscroll=()=>{ const i=Math.round(track.scrollLeft/track.clientWidth); dots.forEach((d,j)=>d.className=j===i?'on':''); };
+  el.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>openFicha(b.dataset.c));
+  el.querySelector('#sale').onclick=()=>{ g.status=onSale?'uso':'venta'; save(); if(session)cloud.pushGarment(g); renderFicha(); render(); };
+  el.querySelector('#gdel').onclick=function(){
+    if(!this.dataset.arm){ this.dataset.arm='1'; this.innerHTML=`${svg('trash',18)} ¿Seguro? Toca otra vez para eliminar`; return; }
+    store.garments=store.garments.filter(x=>x.id!==g.id);
+    store.deletedIds=store.deletedIds||[]; store.deletedIds.push(g.id);
+    save(); haptic(14);
+    if(session)cloud.deleteGarmentCloud(g.id).then(r=>{ if(r&&r.ok){ store.deletedIds=store.deletedIds.filter(i=>i!==g.id); save(); } }).catch(e=>logError('deleteGarmentCloud', e, {user:'La prenda se ha borrado aquí, pero no en la nube. Se reintentará.'}));
+    el.remove(); fichaId=null; render(); toast('Prenda eliminada');
+  };
+  el.querySelector('#wear').onclick=function(){
+    // Antes el botón seguía vivo y un doble toque inflaba el contador. Y
+    // lastWorn se guardaba como el texto "Hoy", que no envejecía nunca: la
+    // ficha seguía diciendo "Última vez: Hoy" seis meses después.
+    if(this.disabled) return;
+    this.disabled=true;
+    haptic(); g.worn=(+g.worn||0)+1; g.lastWornAt=new Date().toISOString(); g.lastWorn=fmtDesde(g.lastWornAt);
+    save(); if(session)cloud.pushGarment(g);
+    renderFicha(); render();
+  };
+  el.querySelectorAll('[data-ff]').forEach(b=>b.onclick=()=>{ haptic(); g.fitFeedback=g.fitFeedback===b.dataset.ff?null:b.dataset.ff; save(); if(session)cloud.pushGarment(g); renderFicha(); });
+  const kmIn=el.querySelector('#km_in');
+  if(kmIn){
+    kmIn.onchange=()=>{ const v=parseFloat(kmIn.value); g.km=isNaN(v)?null:v; save(); if(session)cloud.pushGarment(g); renderFicha(); };
+    el.querySelectorAll('[data-km]').forEach(b=>b.onclick=()=>{ haptic(); g.km=(Number(g.km)||0)+Number(b.dataset.km); save(); if(session)cloud.pushGarment(g); renderFicha(); });
+  }
+  if(el.querySelector('#sell_wallapop'))el.querySelector('#sell_wallapop').onclick=()=>prepararVenta(g,'wallapop');
+  if(el.querySelector('#sell_vinted'))el.querySelector('#sell_vinted').onclick=()=>prepararVenta(g,'vinted');
+  el.querySelector('#docfile').addEventListener('change',ev=>{
+    const f=ev.target.files&&ev.target.files[0]; if(!f)return;
+    const pdf=/pdf/i.test(f.type);
+    g.docs=g.docs||[];
+    g.docs.push({type:pdf?'Factura/PDF':'Ticket',icon:pdf?'file':'receipt',name:f.name,dt:'Hoy',url:URL.createObjectURL(f)});
+    save(); renderFicha();
+  });
+}
+const spec=(l,v,eco)=>`<div class="spec"><div class="l">${l}</div><div class="v${eco?' eco':''}">${v}</div></div>`;
+
+function editGarment(g){
+  const el=document.createElement('div'); el.className='ficha'; el.id='edit';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="eb" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Editar prenda</span></div>
+    ${garmentFormHTML(g,{})}
+    <button class="btn dark" id="esave" style="margin-top:6px">${svg('check',18)} Guardar cambios</button></div>`;
+  document.body.appendChild(el);
+  wireGarmentForms(el);
+  el.querySelector('#eb').onclick=()=>el.remove();
+  el.querySelector('#esave').onclick=()=>{
+    // readForm no devuelve catGroup: antes, cambiar la categoría aquí dejaba el
+    // grupo antiguo para siempre y la prenda quedaba mal archivada en la
+    // cuadrícula, en la maleta y en el motor de gustos. canonPrenda lo recalcula.
+    Object.assign(g, canonPrenda({...g, ...readForm(el)}));
+    save(); if(session)cloud.pushGarment(g); el.remove(); renderFicha(); render();
+  };
+}
+
+async function prepararVenta(g,plataforma){
+  const el=document.createElement('div'); el.className='ficha'; el.id='sellprep';
+  const precioSugerido=Math.round(g.price*0.4);
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="sb">${svg('back',20)}</button><span class="t">Anuncio para ${plataforma==='wallapop'?'Wallapop':'Vinted'}</span></div>
+    <div class="scanimg" style="margin-bottom:14px"><img src="${g.img||''}"/></div>
+    <div id="sell_out"><div class="empty">${svg('load',24)}<div style="margin-top:10px">Generando anuncio…</div></div></div>
+    <button class="btn dark" id="sell_share" style="margin-top:14px">${svg('send',17)} Abrir en ${plataforma==='wallapop'?'Wallapop':'Vinted'} con la foto</button>
+    <div class="sub" style="margin-top:8px;font-size:12px">Se abre la hoja de compartir: elige ${plataforma==='wallapop'?'Wallapop':'Vinted'} y el anuncio empieza con tu foto. El texto va copiado — solo pégalo.</div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('.empty svg')?.classList.add('spin');
+  el.querySelector('#sb').onclick=()=>el.remove();
+  el.querySelector('#sell_share').onclick=async()=>{
+    // texto: el generado si existe, si no uno honesto con los datos reales
+    const t=el.querySelector('#s_titulo')?.value||`${g.brand} ${g.name}`;
+    const d=el.querySelector('#s_desc')?.value||`${g.brand} ${g.name}. Talla ${g.size||'-'}. ${g.cond||'Buen estado'}.`;
+    const p=el.querySelector('#s_precio')?.value;
+    const texto=t+(p?` · ${p}€`:'')+'\n\n'+d;
+    try{ await navigator.clipboard.writeText(texto); }catch(e){ logError('copiar', e, {user:'Tu navegador no dejó copiar. Selecciona el texto a mano.'}); }
+    try{
+      if(g.img&&navigator.canShare){
+        const blob=await (await fetch(g.img)).blob();
+        const file=new File([blob],'prenda.jpg',{type:blob.type||'image/jpeg'});
+        if(navigator.canShare({files:[file]})){ await navigator.share({files:[file],text:texto}); toast('Texto copiado — pégalo en el anuncio'); return; }
+      }
+      if(navigator.share){ await navigator.share({text:texto}); return; }
+    }catch(e){ if(e&&e.name==='AbortError')return; }
+    // fallback: abrir la subida web con el texto ya copiado
+    window.open(plataforma==='wallapop'?'https://es.wallapop.com/app/catalog/upload':'https://www.vinted.es/items/new','_blank');
+    toast('Texto copiado. Sube la foto desde tu galería.');
+  };
+  const sys=`Eres un experto en vender ropa de segunda mano en ${plataforma}. Genera un anuncio atractivo y honesto.
+Devuelve SOLO JSON: {"titulo":"título corto y atractivo, max 50 chars","descripcion":"3-4 frases: estado, detalles, por qué venderla","precio_sugerido":número,"hashtags":["tag1","tag2","tag3"]}.`;
+  const usr=`Prenda: ${g.brand} ${g.name}, tipo ${g.cat}, color ${g.color}, talla ${g.size||'?'}, material ${g.material||'?'}, estado ${g.cond}. Precio original ${g.price}€, usada ${g.worn} veces. Precio orientativo: ${precioSugerido}€.`;
+  const r=await callAI(sys,usr);
+  const out=el.querySelector('#sell_out');
+  const titulo=r?.titulo||`${g.brand} ${g.name} talla ${g.size||''}`.trim();
+  const precio=r?.precio_sugerido||precioSugerido;
+  const desc=r?.descripcion||`${g.brand} ${g.name} en ${(g.cond||'buen estado').toLowerCase()}. Talla ${g.size||'—'}, color ${g.color||'—'}.`;
+  const tags=(r?.hashtags||[g.brand,g.cat,g.color]).filter(Boolean);
+  out.innerHTML=`
+    <div class="field"><label>Título</label><input id="s_titulo" value="${esc(titulo)}"/></div>
+    <div class="field"><label>Precio €</label><input id="s_precio" inputmode="decimal" value="${precio}"/></div>
+    <div class="field"><label>Descripción</label><textarea id="s_desc" rows="5" style="width:100%;font:inherit;padding:12px;border:1px solid var(--hair);border-radius:12px;background:var(--surface);resize:vertical">${esc(desc)}</textarea></div>
+    <div class="chips" style="flex-wrap:wrap;margin-bottom:14px">${tags.map(t=>`<span class="chip on">#${t.replace(/\s+/g,'')}</span>`).join('')}</div>
+    <button class="btn dark" id="s_copy" style="margin-bottom:10px">${svg('file',18)} Copiar anuncio</button>
+    <button class="btn dark" id="s_open">${svg('chev',18)} Abrir ${plataforma==='wallapop'?'Wallapop':'Vinted'}</button>`;
+  out.querySelector('#s_copy').onclick=function(){
+    const t=`${out.querySelector('#s_titulo').value}\n\n${out.querySelector('#s_desc').value}\n\nPrecio: ${out.querySelector('#s_precio').value}€\n${tags.map(x=>'#'+x.replace(/\s+/g,'')).join(' ')}`;
+    navigator.clipboard?.writeText(t).then(()=>{ this.innerHTML=`${svg('check',18)} ¡Copiado!`; setTimeout(()=>{this.innerHTML=`${svg('file',18)} Copiar anuncio`;},1500); });
+  };
+  out.querySelector('#s_open').onclick=()=>window.open(plataforma==='wallapop'?'https://es.wallapop.com/app/catalog/upload':'https://www.vinted.es/items/new','_blank','noopener');
+}
+
+/* ═══════════════════════════════════════════
+   AÑADIR
+═══════════════════════════════════════════ */
+function vAdd(m){
+  if(addMode!=='choose'){ if(m.childElementCount===0){addMode='choose';} else return; }
+  m.innerHTML=`
+    <div class="reveal"><div class="eyebrow">Añadir</div>
+    <div class="title">Tu armario,<br>sin escribir nada</div>
+    <div class="sub">Una foto, el ticket o el email de compra. Nunca invento.</div></div>
+    <div style="margin-top:24px">
+      <button class="opt reveal" id="opt_prenda" style="animation-delay:.05s">
+        <span class="ring">${svg('cam',24)}</span>
+        <div><div class="t1">Fotografiar prenda</div><div class="t2">Reconocimiento especializado en moda</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <input id="pf" type="file" accept="image/*" style="position:absolute;left:-9999px;top:0;opacity:0"/>
+      <button class="opt reveal" id="opt_burst" style="animation-delay:.08s">
+        <span class="ring" style="background:var(--accent)">${svg('spark',24)}</span>
+        <div><div class="t1">Modo ráfaga</div><div class="t2">Sube muchas fotos de golpe · catalogación en cadena</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <input id="bf" type="file" accept="image/*" multiple style="position:absolute;left:-9999px;top:0;opacity:0"/>
+      <button class="opt alt reveal" id="opt_ticket" style="animation-delay:.11s">
+        <span class="ring">${svg('scan',24)}</span>
+        <div><div class="t1">Escanear ticket</div><div class="t2">OCR · varias prendas · garantías y plazos</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <input id="tf" type="file" accept="image/*" style="position:absolute;left:-9999px;top:0;opacity:0"/>
+      <button class="opt alt reveal" id="opt_mail" style="animation-delay:.14s">
+        <span class="ring">${svg('send',24)}</span>
+        <div><div class="t1">Email de compra</div><div class="t2">Pega el email de confirmación y extraigo las prendas</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+      <button class="opt alt reveal" id="manual" style="animation-delay:.17s">
+        <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pen',24)}</span>
+        <div><div class="t1">Añadir manualmente</div><div class="t2">Rellena los datos tú mismo</div></div>
+        <span class="arr">${svg('chev',20)}</span></button>
+    </div>`;
+  const pf=m.querySelector('#pf'), tf=m.querySelector('#tf'), bf=m.querySelector('#bf');
+  m.querySelector('#opt_prenda').onclick=()=>pf.click();
+  m.querySelector('#opt_burst').onclick=()=>bf.click();
+  m.querySelector('#opt_ticket').onclick=()=>tf.click();
+  m.querySelector('#opt_mail').onclick=()=>openEmailImport(m);
+  pf.onchange=e=>handleScan(m,e,'prenda');
+  tf.onchange=e=>handleScan(m,e,'ticket');
+  bf.onchange=e=>handleBurst(m,e);
+  m.querySelector('#manual').onclick=()=>showPrenda(m,null,null);
+}
+
+/* ═══ EMAIL DE COMPRA: pegar texto o captura ═══ */
+function openEmailImport(m){
+  addMode='email';
+  m.innerHTML=`
+    <div class="backbar"><button id="eb0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Email de compra</span></div>
+    <div class="reveal">
+      <div class="sub" style="margin:4px 0 16px">Pega el email de confirmación (Zara, ASOS, Zalando…) o sube una captura. Extraigo las prendas con talla, color y precio reales.</div>
+      <textarea id="em_txt" class="mailbox" placeholder="Pega aquí el texto del email…"></textarea>
+      <button class="btn dark" id="em_go" disabled style="margin-top:12px;opacity:.55">${svg('spark',18)} Extraer prendas</button>
+      <div class="mail-or"><span>o</span></div>
+      <button class="btn ghost" id="em_shot">${svg('cam',18)} Subir captura del email</button>
+      <input id="em_file" type="file" accept="image/*" style="position:absolute;left:-9999px;opacity:0"/>
+    </div>`;
+  m.querySelector('#eb0').onclick=()=>{ addMode='choose'; vAdd(m); };
+  const txt=m.querySelector('#em_txt'), go=m.querySelector('#em_go');
+  txt.oninput=()=>{ const ok=txt.value.trim().length>40; go.disabled=!ok; go.style.opacity=ok?'1':'.55'; };
+  go.onclick=async function(){
+    this.disabled=true; this.innerHTML=`${svg('load',18)} Leyendo email…`; this.querySelector('svg').classList.add('spin');
+    let r=await callAI(EMAIL_SYSTEM,'Extrae las prendas de este email de compra:\n\n'+txt.value.trim().slice(0,6000));
+    if(!r) r=await callAI(EMAIL_SYSTEM,'Extrae las prendas de este email de compra:\n\n'+txt.value.trim().slice(0,6000));
+    if(addMode!=='email')return;
+    if(r&&r.items&&r.items.length){
+      haptic(14);
+      // normalizar al formato del ticket y reutilizar su formulario editable
+      r.items.forEach(depurarVision);
+      m.innerHTML=`<div class="backbar"><button id="eb1" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Email leído</span></div><div id="stage"></div>`;
+      m.querySelector('#eb1').onclick=()=>{ addMode='choose'; vAdd(m); };
+      showTicket(m,{...r,date:r.dateISO||''},null);
+    } else {
+      this.disabled=false; this.innerHTML=`${svg('spark',18)} Extraer prendas`;
+      toast('No pude extraer prendas de ese texto. Prueba con la captura.');
+    }
+  };
+  const ef=m.querySelector('#em_file');
+  m.querySelector('#em_shot').onclick=()=>ef.click();
+  ef.onchange=e=>handleScan(m,e,'ticket'); // la captura del email va por visión, mismo pipeline que el ticket
+}
+
+/* ═══ MODO RÁFAGA: catalogación en cadena ═══ */
+async function handleBurst(m,e){
+  const files=[...(e.target.files||[])].slice(0,20);
+  e.target.value='';
+  if(!files.length)return;
+  addMode='burst';
+  let cancelled=false;
+  const results=[]; // {ok, id, name, brand, low, error}
+  m.innerHTML=`
+    <div class="backbar"><button id="bb0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Modo ráfaga</span></div>
+    <div class="burst-head">
+      <div class="burst-count" id="bcount">0<span>/${files.length}</span></div>
+      <div class="sub" id="bstatus">Catalogando tu armario…</div>
+      <div class="burst-bar"><div id="bbar" style="width:0%"></div></div>
+    </div>
+    <div class="burst-list" id="blist"></div>
+    <button class="btn dark" id="bdone" style="margin-top:16px;display:none">${svg('check',18)} Ver mi armario</button>`;
+  const list=m.querySelector('#blist');
+  m.querySelector('#bb0').onclick=()=>{ cancelled=true; addMode='choose'; vAdd(m); };
+
+  for(let i=0;i<files.length;i++){
+    if(cancelled)return;
+    const row=document.createElement('div'); row.className='burst-row';
+    row.innerHTML=`<div class="br-ph skel"></div><div class="br-info"><div class="br-n">Prenda ${i+1}</div><div class="br-s">Analizando…</div></div><span class="br-state">${svg('load',16)}</span>`;
+    row.querySelector('svg')?.classList.add('spin');
+    list.prepend(row);
+    try{
+      const img=await imageToBase64(files[i],1152,0.85);
+      row.querySelector('.br-ph').outerHTML=`<div class="br-ph"><img src="${img.dataUrl}"/></div>`;
+      let r=await callAI(visionSystem(),'Analiza esta prenda con máxima precisión.',img);
+      if(!r) r=await callAI(visionSystem(),'Analiza esta prenda con máxima precisión.',img);
+      if(cancelled)return;
+      if(r&&r.detected){
+        depurarVision(r);
+        const c=r.confidence||{};
+        const low=Object.values(c).some(v=>v<0.75);
+        const gid='g'+Date.now()+Math.random().toString(36).slice(2,6);
+        addGarment({id:gid,brand:r.brand||'',name:r.name||r.cat||'Prenda',cat:r.cat||'',pattern:r.pattern||'',conf:r.confidence||null,
+          fit:r.fit||'Regular Fit',color:r.color||'—',colors:(r.colors&&r.colors.length?r.colors:[r.color||'—']),
+          material:r.material||'',size:'',season:r.season||'Todo el año',formality:r.formality||'Casual',
+          context:r.context==='deporte'?'deporte':'calle',sport:r.context==='deporte'?(r.sport||''):'',
+          bought:'—',store:'',price:0,cond:'Como nuevo',worn:0,lastWorn:'—',status:'uso',
+          img:img.dataUrl,photos:[],docs:[],tags:[]});
+        results.push({ok:true,id:gid,name:r.name||r.cat,brand:r.brand||'',low});
+        row.querySelector('.br-n').textContent=(r.brand?r.brand+' · ':'')+(r.name||r.cat||'Prenda');
+        row.querySelector('.br-s').textContent=low?'Guardada · revisa los detalles':'Catalogada';
+        row.querySelector('.br-state').innerHTML=low?svg('spark',16):svg('check',16);
+        row.classList.add(low?'low':'ok');
+        row.onclick=()=>openFicha(gid);
+      } else {
+        results.push({ok:false});
+        row.querySelector('.br-n').textContent='Prenda '+(i+1);
+        row.querySelector('.br-s').textContent='No identificada · añádela manualmente';
+        row.querySelector('.br-state').innerHTML='✕';
+        row.classList.add('err');
+      }
+    }catch(err){
+      results.push({ok:false});
+      row.querySelector('.br-s').textContent='Error con esta imagen';
+      row.querySelector('.br-state').innerHTML='✕';
+      row.classList.add('err');
+    }
+    const done=i+1, oks=results.filter(x=>x.ok).length;
+    const bc=m.querySelector('#bcount'), bb=m.querySelector('#bbar');
+    if(bc)bc.innerHTML=`${done}<span>/${files.length}</span>`;
+    if(bb)bb.style.width=Math.round(done/files.length*100)+'%';
+  }
+  if(cancelled)return;
+  haptic(16);
+  const oks=results.filter(x=>x.ok).length, lows=results.filter(x=>x.low).length, errs=results.length-oks;
+  const st=m.querySelector('#bstatus');
+  if(st)st.innerHTML=`<b>${oks} catalogada${oks!==1?'s':''}</b>${lows?` · ${lows} para revisar`:''}${errs?` · ${errs} fallida${errs!==1?'s':''}`:''}`;
+  const doneBtn=m.querySelector('#bdone');
+  if(doneBtn){ doneBtn.style.display='flex'; doneBtn.onclick=()=>{ addMode='choose'; go('armario'); }; }
+}
+
+function handleScan(m,e,kind){
+  addMode='scan'; // protege el escaneo de re-renders de fondo (refresh de sesión al volver de la cámara)
+  const f=e.target.files&&e.target.files[0];
+  e.target.value='';
+  if(!f){
+    m.innerHTML=`<div class="backbar"><button id="b9" style="color:var(--ink)">${svg('back',20)}</button><span class="t">Sin imagen</span></div>
+      <div class="note warn" style="margin-top:14px">${svg('spark',18)}<span>No se recibió ninguna imagen. Si la cámara no se abrió, prueba a elegir una foto de la galería.</span></div>`;
+    m.querySelector('#b9').onclick=()=>{addMode='choose';vAdd(m);};
+    return;
+  }
+  const sizeMB=(f.size/1048576).toFixed(1);
+  m.innerHTML=`
+    <div class="backbar"><button id="b0" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Leyendo ticket':'Reconociendo prenda'}</span></div>
+    <div class="empty" style="padding-top:80px">${svg('load',30)}<div style="margin-top:14px">Preparando imagen…</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--ink3)">${f.type||'tipo?'} · ${sizeMB} MB</div></div>`;
+  m.querySelector('#b0').onclick=()=>{addMode='choose';vAdd(m);};
+  imageToBase64(f, kind==='ticket'?1800:1152, kind==='ticket'?0.92:0.85)
+    .then(img=>runPipeline(m,img,kind))
+    .catch(err=>{
+      m.innerHTML=`
+        <div class="backbar"><button id="b1" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Ticket':'Prenda'}</span></div>
+        <div class="note warn" style="margin-top:14px">${svg('spark',18)}<span>No pude procesar la foto.<br><b>Motivo:</b> ${esc(err.message||'error')}<br><b>Archivo:</b> ${esc(f.type||'?')} · ${sizeMB} MB</span></div>
+        <button class="btn dark" id="man" style="margin-top:14px">${svg('pen',18)} Añadir manualmente</button>
+        <button class="btn ghost" id="retry" style="margin-top:10px">Volver a intentar</button>`;
+      m.querySelector('#b1').onclick=()=>{addMode='choose';vAdd(m);};
+      m.querySelector('#man').onclick=()=>showPrenda(m,null,null);
+      m.querySelector('#retry').onclick=()=>{addMode='choose';vAdd(m);};
+    });
+}
+
+async function runPipeline(m,img,kind){
+  const steps=kind==='ticket'
+    ?['Procesando imagen','Corrigiendo perspectiva','Leyendo línea a línea','Extrayendo prendas y precios']
+    :['Analizando la prenda','Identificando tipo y corte','Buscando marca y tejido','Afinando el resultado'];
+  m.innerHTML=`
+    <div class="backbar"><button id="b" style="color:var(--ink)">${svg('back',20)}</button><span class="t">${kind==='ticket'?'Leyendo ticket':'Reconociendo prenda'}</span></div>
+    <div id="stage">
+      <div class="scanwrap">
+        <img src="${img.dataUrl}" alt=""/>
+        <div class="scan-veil"></div>
+        <div class="scan-line"></div>
+        <div class="scan-reveal" id="scanreveal"></div>
+      </div>
+      <div class="pipe-steps" id="psteps">${steps.map((s,i)=>`<div class="pstep" id="ps${i}"><span class="pdot"></span>${s}</div>`).join('')}</div>
+    </div>`;
+  m.querySelector('#b').onclick=()=>{addMode='choose';vAdd(m);};
+
+  // pasos con ritmo orgánico (rápido al inicio, se detiene en el último hasta que la IA responde)
+  const stepDelays=[500,900,1500];
+  stepDelays.forEach((d,i)=>setTimeout(()=>{ const el=m.querySelector(`#ps${i}`); if(el)el.classList.add('done'); },d));
+
+  // llamada a la IA con un reintento automático si falla
+  const usr=kind==='ticket'?'Extrae todas las prendas de este ticket de compra.':'Analiza esta prenda con máxima precisión.';
+  const sys=kind==='ticket'?TICKET_SYSTEM:visionSystem();
+  // callAI ya reintenta sola cuando tiene sentido (errores 5xx y cortes).
+  const result=await callAI(sys,usr,img);
+
+  steps.forEach((_,i)=>{ const el=m.querySelector(`#ps${i}`); if(el)el.classList.add('done'); });
+
+  // si el usuario pulsó atrás durante el análisis, no sobrescribir su pantalla
+  if(!m.querySelector('#stage')) return;
+
+  // momento de revelación editorial sobre la foto
+  const rev=m.querySelector('#scanreveal');
+  const wrap=m.querySelector('.scanwrap');
+  if(rev&&result){
+    haptic(14);
+    if(kind!=='ticket'&&result.garment_count>1&&result.items?.length>1){
+      rev.innerHTML=`<div class="sr-k">Varias prendas</div><div class="sr-n">${result.items.length} detectadas</div>`;
+    } else if(kind==='ticket'&&result.items?.length){
+      rev.innerHTML=`<div class="sr-k">${esc(result.store||'Ticket leído')}</div><div class="sr-n">${result.items.length} prenda${result.items.length>1?'s':''} encontrada${result.items.length>1?'s':''}</div>`;
+    } else if(kind!=='ticket'&&result.detected){
+      rev.innerHTML=`<div class="sr-k">${esc(result.brand||'Identificada')}</div><div class="sr-n">${esc(result.name||result.cat||'Prenda')}</div>`;
+    }
+    if(rev.innerHTML){ wrap.classList.add('found'); await new Promise(r=>setTimeout(r,1300)); }
+  }
+  if(!m.querySelector('#stage')) return; // salió durante la revelación
+  if(kind==='ticket') showTicket(m,result,img);
+  else if(result&&result.garment_count>1&&Array.isArray(result.items)&&result.items.length>1) showMultiPrenda(m,result,img);
+  else showPrenda(m,result,img);
+}
+
+/* ═══ LO QUE HA VISTO ═══
+   Antes de un formulario de quince campos, una tarjeta con lo que importa:
+   qué es, de qué marca, qué modelo, de qué color, y cómo de seguro está cada
+   cosa. La marca dice DE DÓNDE sale: no es lo mismo leerla en la etiqueta que
+   deducirla por la forma del modelo, y el usuario tiene que saberlo. */
+const ESTADO_MARCA={
+  leida:   ['ok','Leída en la etiqueta'],
+  probable:['dud','Probable: confírmala'],
+  modelo:  ['dud','Por el modelo'],
+  nada:    ['nada','No se ve']
+};
+function detectadoHTML(r){
+  if(!r)return '';
+  const c=r.confidence||{};
+  const seguro=k=>typeof c[k]==='number'&&c[k]>=0.75;
+  const grupo=grupoDeCat(r.cat)||'';
+  const [cls,txt]=ESTADO_MARCA[r.brandStatus]||ESTADO_MARCA.nada;
+  const col=canonColor(r.color);
+  const fila=(k,v,estado)=>`<div class="dt-row"><span class="dt-k">${k}</span><span class="dt-v">${v}</span>${estado||''}</div>`;
+  const st=(ok,t)=>`<span class="dt-st ${ok?'ok':'dud'}">${ok?svg('check',12)+' ':''}${t}</span>`;
+  return `<div class="detect reveal">
+    <div class="dt-head">${svg('spark',15)} Esto es lo que veo</div>
+    ${fila('Es', r.cat?esc(r.cat)+(grupo&&grupo!==r.cat?` <span class="dt-g">${esc(grupo)}</span>`:''):'<span class="dt-no">No lo tengo claro</span>', r.cat?st(seguro('cat'),seguro('cat')?'Seguro':'Revísalo'):'')}
+    ${fila('Marca', r.brand?esc(r.brand):'<span class="dt-no">—</span>', `<span class="dt-st ${cls}">${cls==='ok'?svg('check',12)+' ':''}${txt}</span>`)}
+    ${r.modelo?fila('Modelo', esc(r.modelo.modelo), `<span class="dt-st ok">${esc(FAMILIAS[r.modelo.familia]?.nombre||'')}</span>`):''}
+    ${fila('Color', col?`<i class="sw" style="background:${MUESTRA_COLOR[col]||'#ccc'}"></i>${esc(col)}`:'<span class="dt-no">No lo distingo</span>', col?st(seguro('color'),seguro('color')?'Seguro':'Revísalo'):'')}
+  </div>`;
+}
+
+function showPrenda(m,r,img){
+  // Sin foto (alta manual, o «Lo compro» desde la tienda) no hay nada que la IA
+  // haya podido fallar: no se dice «no pude analizarla».
+  const conFoto=!!img;
+  const failed=conFoto&&(!r||!r.detected);
+  depurarVision(r);
+  // Sin foto, lo que llega (del escáner de tienda) lo ha escrito el usuario:
+  // no se le pintan porcentajes de confianza a sus propios datos.
+  const c=conFoto?(r?.confidence||{}):{};
+  // Si la IA no supo decir dónde vive la prenda, no se asume "calle" en
+  // silencio: la pregunta «¿Dónde la usas?» sale marcada como dudosa.
+  if(!r||!r.context) c.context=0;
+  const hasLow=conFoto&&Object.entries(c).some(([k,v])=>k!=='context'&&v<0.75);
+  const stage=m?.querySelector?.('#stage')||m;
+  stage.innerHTML=`
+    ${!conFoto?''
+    :failed?`<div class="note warn reveal" style="margin-bottom:14px">${svg('spark',18)}<span>${!r&&ultimoFalloIA?`No he podido analizarla: ${esc(ultimoFalloIA.status===503?'el servicio de IA no está disponible ahora mismo':ultimoFalloIA.status===0?'no hay conexión o ha tardado demasiado':'la IA ha devuelto un error ('+ultimoFalloIA.status+')')}.`:'No veo bien la prenda en esta foto.'} Rellena los datos — nunca invento.</span></div>`
+    :detectadoHTML(r)}
+    ${img?`<div class="scanimg reveal" style="animation-delay:.05s" id="scanprev"><img src="${img.dataUrl}"/></div>
+    <button class="studio-btn reveal" id="studiobtn" style="animation-delay:.07s">${svg('spark',15)} Fondo de estudio</button>`:''}
+    ${hasLow?`<div class="note warn reveal" style="margin:0 0 14px">${svg('spark',18)}<span>Lo que está en naranja no lo he visto claro. Revísalo antes de guardar.</span></div>`:''}
+    <div class="reveal" style="animation-delay:.1s">${garmentFormHTML(r||{},c)}</div>
+    <button class="btn dark reveal" id="conf" style="margin-top:6px;animation-delay:.18s">${svg('add',18,2)} Añadir al armario</button>`;
+  // Fondo de estudio: recorte real + blanco roto uniforme
+  const stBtn=stage.querySelector('#studiobtn');
+  if(stBtn&&img){
+    const runStudio=async()=>{
+      stBtn.disabled=true; stBtn.innerHTML=`${svg('load',15)} Preparando estudio… (la primera vez tarda un poco)`; stBtn.querySelector('svg').classList.add('spin');
+      try{
+        const out=await studioPhoto(img.dataUrl);
+        img.dataUrl=out; img.data=out.split(',')[1];
+        const pv=stage.querySelector('#scanprev img');
+        if(pv){ pv.style.transition='opacity .35s var(--ease)'; pv.style.opacity='0';
+          setTimeout(()=>{ pv.src=out; pv.onload=()=>pv.style.opacity='1'; },360); }
+        store.profile=store.profile||{}; store.profile.studioPhoto=true; save();
+        stBtn.innerHTML=`${svg('check',15)} Foto de estudio aplicada`; haptic();
+      }catch(e){
+        stBtn.disabled=false; stBtn.innerHTML=`${svg('spark',15)} Fondo de estudio`;
+        toast('No pude recortar bien esta foto: '+(e.message||''));
+      }
+    };
+    stBtn.onclick=runStudio;
+    if(store.profile?.studioPhoto) runStudio(); // preferencia recordada
+  }
+
+  wireGarmentForms(stage);
+  stage.querySelector('#conf').onclick=async function(){
+    if(this.disabled) return;           // sin esto, un doble toque añadía dos
+    if(faltaContexto(stage)) return;    // ¿calle o deporte? se responde antes de guardar
+    const d=readForm(stage);
+    const prenda={...d,bought:'Hoy',worn:0,lastWorn:'—',status:'uso',
+      img:img?.dataUrl||'./assets/silbon-raquetas-white.png',photos:[],docs:[],tags:[]};
+    this.disabled=true;
+    const seguir=await avisarSiDuplicado(prenda);
+    if(!seguir){ this.disabled=false; return; }
+    addGarment(prenda);
+    trackPurchaseEvent({brand:d.brand,cat:d.cat,price:d.price,store:d.store,channel:'manual'});
+    celebrateAdd(img?.dataUrl, `${d.brand||''} ${d.name||d.cat}`).then(()=>{ addMode='choose'; go('armario'); });
+  };
+}
+
+/* Aquí vivía `normalizeCat`, con su propio mapa de traducciones y una regla de
+   "coincidencia parcial única" que convertía la respuesta genérica y correcta
+   de la IA en una específica y errónea ('camisa' → 'Sobrecamisa', 'chaqueta' →
+   'Chaqueta denim'). El catálogo, los sinónimos y las traducciones son ahora
+   uno solo y están en lib/normalize.js (`canonCat`), que es también quien
+   decide el grupo. Todo lo que devuelve la IA pasa por `depurarVision`. */
+
+function showTicket(m,r,img){
+  if(!r||!r.items?.length)r={store:'',date:'',items:[{name:'',brand:'',price:0,cat:'',confidence:.5}]};
+  r.items.forEach(depurarVision);
+  const stage=m.querySelector('#stage');
+  const today=new Date().toISOString().slice(0,10);
+  stage.innerHTML=`
+    <div class="note" style="margin-bottom:14px">${svg('receipt',18)}<span>He leído el ticket. <b>Revisa y corrige</b> lo que no haya detectado bien antes de guardar — no invento nada.</span></div>
+    ${img?`<div class="scanimg"><img src="${img.dataUrl}"/></div>`:''}
+
+    <div class="shead"><h2>Datos del ticket</h2></div>
+    <div class="row2">
+      <div class="field"><label>Tienda / Marca</label><input id="t_store" value="${esc(r.store||'')}" placeholder="Ecoalf"/></div>
+      <div class="field"><label>Fecha de compra</label><input id="t_date" type="date" value="${r.dateISO||today}"/></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Total (€)</label><input id="t_total" inputmode="decimal" value="${r.total||''}" placeholder="—"/></div>
+      <div class="field"><label>Días para devolver</label><input id="t_return" inputmode="numeric" value="${r.returnDays||30}" placeholder="30"/></div>
+    </div>
+    <div class="field"><label>Garantía (meses, opcional)</label><input id="t_warranty" inputmode="numeric" value="${r.warrantyMonths||''}" placeholder="Ej. 24 para calzado/electrónica"/></div>
+
+    <div class="shead"><h2>Prendas del ticket · ${r.items.length}</h2></div>
+    <div id="t_items">
+      ${r.items.map((it,i)=>`<div class="titem" data-i="${i}">
+        <div class="titem-head">Prenda ${i+1}<button class="titem-del" data-del="${i}">${svg('trash',15)}</button></div>
+        ${garmentFormHTML({brand:it.brand||'',name:it.name||'',cat:it.cat||'',price:it.price||0,color:it.color||'',material:'',size:it.size||'',fit:'Regular Fit',season:'Todo el año',formality:'Casual',cond:'Nuevo con etiqueta'}, it.confidence?{}:{},'ti'+i+'_')}
+      </div>`).join('')}
+    </div>
+    <button class="btn ghost" id="t_add" style="margin-bottom:14px">${svg('add',16)} Añadir otra prenda del ticket</button>
+    <button class="btn dark" id="conf">${svg('add',18,2)} Guardar ticket y prendas</button>`;
+
+  wireGarmentForms(stage);
+  const rebuildDel=()=>stage.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
+    const items=stage.querySelectorAll('.titem'); if(items.length<=1)return;
+    b.closest('.titem').remove();
+  });
+  rebuildDel();
+  stage.querySelector('#t_add').onclick=()=>{
+    const wrap=stage.querySelector('#t_items'); const i=wrap.querySelectorAll('.titem').length;
+    const div=document.createElement('div'); div.className='titem'; div.dataset.i=i;
+    div.innerHTML=`<div class="titem-head">Prenda ${i+1}<button class="titem-del" data-del="${i}">${svg('trash',15)}</button></div>`+
+      garmentFormHTML({fit:'Regular Fit',season:'Todo el año',formality:'Casual',cond:'Nuevo con etiqueta'},{},'ti'+i+'_');
+    wrap.appendChild(div); wireGarmentForms(div); rebuildDel();
+  };
+
+  stage.querySelector('#conf').onclick=async ()=>{
+    const store_=stage.querySelector('#t_store').value.trim();
+    const dateISO=stage.querySelector('#t_date').value||today;
+    const total=parseFloat(stage.querySelector('#t_total').value)||0;
+    const returnDays=parseInt(stage.querySelector('#t_return').value)||0;
+    const warrantyMonths=parseInt(stage.querySelector('#t_warranty').value)||0;
+    const ticketId='t'+Date.now()+Math.random().toString(36).slice(2,5);
+
+    // guardar imagen del ticket en Storage (si hay sesión); si no, queda en local
+    let ticketImgUrl=img?.dataUrl||null;
+    if(session && img?.dataUrl){
+      const up=await cloud.uploadTicketImage(ticketId,img.dataUrl).catch(()=>null);
+      if(up&&up.url)ticketImgUrl=up.url;
+    }
+
+    // leer cada prenda del formulario
+    const items=[]; const garmentIds=[];
+    stage.querySelectorAll('.titem').forEach(node=>{
+      const pre='ti'+node.dataset.i+'_';
+      const d=readFormPrefixed(node,pre);
+      if(!d.cat && !d.brand && !d.name) return; // vacía, ignorar
+      const gid='g'+Date.now()+Math.random().toString(36).slice(2,6);
+      garmentIds.push(gid);
+      // Esta vía construía la prenda a mano y se saltaba `canonPrenda`, que es
+      // la puerta por la que pasan las demás. Consecuencias reales: la marca y
+      // el color entraban como el literal "—" (que luego el motor de gustos
+      // contaba como una marca más), el grupo salía de `catToGroup`, que ante
+      // la duda devuelve "Accesorios", y el corte se forzaba a "Regular Fit"
+      // SIEMPRE — también en unas zapatillas, donde no significa nada.
+      const g=canonPrenda({id:gid,context:d.context,sport:d.sport,brand:d.brand,name:d.name,cat:d.cat,
+        fit:d.fit,color:d.color,colors:d.colors,material:d.material,size:d.size,
+        season:d.season||'Todo el año',formality:d.formality||'Casual',bought:dateISO,store:store_,price:d.price,
+        cond:d.cond||'Nuevo con etiqueta',worn:0,lastWorn:'—',status:'uso',img:ticketImgUrl||'./assets/silbon-raquetas-white.png',
+        photos:[],docs:[],tags:[],sku:'',ticketId});
+      store.garments.unshift(g); save();
+      if(session) cloud.pushGarment(g).then(res=>{ if(res&&!res.ok) showSyncWarning(res.reason); });
+      items.push({brand:g.brand,cat:g.cat,price:g.price});
+      trackPurchaseEvent({brand:g.brand,cat:g.cat,price:g.price,store:store_,channel:'physical'});
+    });
+
+    // guardar el ticket
+    const ticket={id:ticketId,store:store_,dateISO,total:total||items.reduce((s,x)=>s+(x.price||0),0),
+      returnDays,warrantyMonths,img:ticketImgUrl,garmentIds,items,createdAt:new Date().toISOString()};
+    saveTicket(ticket);
+
+    addMode='choose'; go('armario');
+  };
+}
+
+// lee un formulario de prenda con prefijo en los ids (para varios en la misma pantalla)
+/* Lee un formulario de prenda. Los ids llevan prefijo para que quepan varios en
+   la misma pantalla (la ráfaga de fotos y las líneas de un ticket).
+   Tolera campos ausentes: desde que el formulario se adapta al tipo, el corte,
+   el estampado, la talla y la temporada pueden no estar pintados. Un campo que
+   no existe devuelve '' — que es justo lo que hay que guardar. */
+function readFormPrefixed(scope,pre){
+  const q=id=>{ const e=scope.querySelector('#'+pre+id); return e?e.value.trim():''; };
+  const color=q('color');
+  const cat=canonCat(q('cat'))||q('cat');
+  return {brand:canonMarca(q('brand')),name:q('name'),cat,fit:canonCorte(q('fit'),cat),
+    color,colors:color?[color]:[],material:q('mat'),
+    pattern:q('pattern'),size:q('size'),price:q('price'),season:q('season'),formality:q('form'),cond:q('cond'),
+    store:q('store'),context:q('ctx')||'calle',sport:q('ctx')==='deporte'?q('sport'):'',
+    // Solo se escribe cuando es verdad: al editar, no borra una confirmación anterior.
+    ...((scope.querySelector('#'+pre+'ctx')||{}).dataset?.confirmado==='1'?{contextoConfirmado:true}:{})};
+}
+
+function saveWishlistItem(w){
+  store.wishlist=store.wishlist||[];
+  w.createdAt=new Date().toISOString();
+  store.wishlist.unshift(w);
+  save();
+  if(session) cloud.saveWishlistCloud(w).then(r=>{ if(r&&!r.ok) showSyncWarning(r.reason); });
+}
+function deleteWishlistItem(id){
+  store.wishlist=(store.wishlist||[]).filter(w=>w.id!==id);
+  save();
+  if(session) cloud.deleteWishlistCloud(id);
+}
+function openWishlist(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='wishlist';
+  const paint=()=>{
+    const items=store.wishlist||[];
+    el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+      <div class="backbar"><button id="wlb">${svg('back',20)}</button><span class="t">Wishlist</span></div>
+      ${items.length?`<div class="sub" style="margin-bottom:14px">Prendas que vigilas. Toca «Revisar precio» para ver el mejor precio de hoy.</div>`:''}
+      ${items.length?'':`<div class="empty" style="padding-top:60px">${svg('heart',28)}<div style="margin-top:12px">Aún no vigilas ninguna prenda.<br>Guárdalas desde «¿Me lo compro?».</div></div>`}
+      ${items.map(w=>`<div class="wl-card" data-id="${w.id}">
+        <div class="wl-ph">${w.thumbnail?`<img loading="lazy" src="${esc(w.thumbnail)}"/>`:svg('heart',20)}</div>
+        <div class="wl-info">
+          <div class="wl-n">${esc(w.desc||((w.brand||'')+' '+(w.tipo||'')))}</div>
+          <div class="wl-meta">${w.lastPrice?`Visto a <b>${Number(w.lastPrice).toFixed(0)}€</b>`:'Sin precio aún'}${w.targetPrice?` · objetivo ${Number(w.targetPrice).toFixed(0)}€`:''}</div>
+          <div class="wl-check" id="chk_${w.id}"></div>
+          <div class="wl-actions">
+            <button class="wl-btn" data-check="${w.id}">${svg('tag',14)} Revisar precio</button>
+            ${w.lastLink?`<a class="wl-btn ghost" href="${esc(w.lastLink)}" target="_blank" rel="noopener">Ver ${esc(w.lastSource||'tienda')}</a>`:''}
+            <button class="wl-del" data-del="${w.id}" aria-label="Quitar">${svg('trash',15)}</button>
+          </div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+    el.querySelector('#wlb').onclick=()=>el.remove();
+    el.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ deleteWishlistItem(b.dataset.del); paint(); });
+    el.querySelectorAll('[data-check]').forEach(b=>b.onclick=async function(){
+      const w=(store.wishlist||[]).find(x=>x.id===this.dataset.check); if(!w)return;
+      this.disabled=true; this.innerHTML=`${svg('load',14)} …`; this.querySelector('svg').classList.add('spin');
+      const u=userContext();
+      const res=await searchOffersExtensive({query:w.query||((w.brand||'')+' '+(w.tipo||'')),brand:w.brand,productType:w.tipo,ownedBrands:u.topBrands,sex:u.sex,avgPrice:u.avgPrice});
+      const box=el.querySelector('#chk_'+w.id);
+      const best=res&&res.exact&&res.exact[0];
+      if(best){
+        const price=best.price_value||null;
+        const dropped=price&&w.lastPrice&&price<w.lastPrice-0.01;
+        if(box)box.innerHTML=`<div class="wl-now ${dropped?'drop':''}">${dropped?svg('spark',13)+' ¡Ha bajado! ':''}Hoy: <b>${best.price||''}</b> en ${esc(best.source||'')} · <a href="${esc(best.link)}" target="_blank" rel="noopener">ver</a></div>`;
+        if(price){ w.lastPrice=price; w.lastLink=best.link; w.lastSource=best.source; if(best.thumbnail)w.thumbnail=best.thumbnail; save(); if(session)cloud.saveWishlistCloud(w); }
+        if(dropped)haptic(20);
+      } else if(box){
+        box.innerHTML=`<div class="wl-now">Sin resultados ahora mismo para esta búsqueda.</div>`;
+      }
+      this.disabled=false; this.innerHTML=`${svg('tag',14)} Revisar precio`;
+    });
+  };
+  paint();
+  document.body.appendChild(el);
+}
+
+function saveTicket(t){
+  store.tickets=store.tickets||[];
+  store.tickets.unshift(t);
+  save();
+  if(session) cloud.saveTicketCloud(t).then(r=>{ if(r&&!r.ok) showSyncWarning(r.reason); });
+}
+function deleteTicket(id){
+  store.tickets=(store.tickets||[]).filter(t=>t.id!==id);
+  save();
+  if(session) cloud.deleteTicketCloud(id);
+}
+
+let ticketSort='date';
+function openTickets(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='tickets-view';
+  renderTicketsView(el);
+  document.body.appendChild(el);
+}
+function fmtDate(iso){ if(!iso)return '—'; const d=new Date(iso); if(isNaN(d))return iso; return d.toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'}); }
+function returnStatus(t){
+  if(!t.returnDays||!t.dateISO)return null;
+  const limit=new Date(t.dateISO); limit.setDate(limit.getDate()+t.returnDays);
+  const days=Math.ceil((limit-Date.now())/86400000);
+  if(days<0)return {txt:'Plazo de cambio vencido',cls:'off',limit};
+  if(days<=7)return {txt:`Últimos ${days} día(s) para cambiar`,cls:'urgent',limit};
+  return {txt:`Cambio hasta ${fmtDate(limit.toISOString())}`,cls:'ok',limit};
+}
+function renderTicketsView(el){
+  const tickets=(store.tickets||[]).slice();
+  let groups;
+  if(ticketSort==='store'){
+    const by={}; tickets.forEach(t=>{const k=t.store||'Sin tienda';(by[k]=by[k]||[]).push(t);});
+    groups=Object.keys(by).sort().map(k=>({title:k,items:by[k]}));
+  } else {
+    tickets.sort((a,b)=>(b.dateISO||'').localeCompare(a.dateISO||''));
+    groups=[{title:null,items:tickets}];
+  }
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="tvb">${svg('back',20)}</button><span class="t">Tickets y garantías</span></div>
+    <div class="viewseg" style="margin-bottom:16px">
+      <button class="vseg ${ticketSort==='date'?'on':''}" data-sort="date">Cronológico</button>
+      <button class="vseg ${ticketSort==='store'?'on':''}" data-sort="store">Por tienda</button>
+    </div>
+    ${tickets.length?'':`<div class="empty" style="padding-top:50px">${svg('receipt',28)}<div style="margin-top:12px">Aún no has escaneado tickets.<br>Escanea uno desde el botón + · Escanear ticket.</div></div>`}
+    ${groups.map(g=>`${g.title?`<div class="tk-group">${esc(g.title)}</div>`:''}${g.items.map(t=>{
+      const rs=returnStatus(t);
+      const warranty=t.warrantyMonths?(()=>{const w=new Date(t.dateISO);w.setMonth(w.getMonth()+t.warrantyMonths);return `Garantía hasta ${fmtDate(w.toISOString())}`;})():null;
+      return `<div class="tk-card" data-id="${t.id}">
+        ${t.img?`<div class="tk-thumb"><img loading="lazy" decoding="async" src="${esc(t.img)}"/></div>`:`<div class="tk-thumb ph">${svg('receipt',22)}</div>`}
+        <div class="tk-body">
+          <div class="tk-store">${esc(t.store||'Ticket')}</div>
+          <div class="tk-meta">${fmtDate(t.dateISO)} · ${(t.items||[]).length} prenda(s) · ${Math.round(t.total||0)}€</div>
+          ${rs?`<div class="tk-badge ${rs.cls}">${svg('spark',12)} ${rs.txt}</div>`:''}
+          ${warranty?`<div class="tk-badge ok" style="margin-top:4px">${svg('check',12)} ${warranty}</div>`:''}
+        </div>
+        <button class="tk-del" data-del="${t.id}">${svg('trash',16)}</button>
+      </div>`;}).join('')}`).join('')}
+  </div>`;
+  el.querySelector('#tvb').onclick=()=>el.remove();
+  el.querySelectorAll('[data-sort]').forEach(b=>b.onclick=()=>{ ticketSort=b.dataset.sort; renderTicketsView(el); });
+  el.querySelectorAll('[data-del]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteTicket(b.dataset.del); renderTicketsView(el); });
+  el.querySelectorAll('.tk-card').forEach(c=>c.onclick=()=>{ const t=(store.tickets||[]).find(x=>x.id===c.dataset.id); if(t&&t.img)openTicketImage(t.img); });
+}
+function openTicketImage(url){
+  const ov=document.createElement('div'); ov.className='tk-lightbox'; ov.innerHTML=`<img src="${esc(url)}"/>`;
+  ov.onclick=()=>ov.remove(); document.body.appendChild(ov);
+}
+
+/* catToGroup vivía aquí con nueve grupos y lib/taste.js tenía otra lista de
+   siete que NO coincidía ("Chaquetas/Abrigos" contra "Abrigos/Chaquetas").
+   Además el `return 'Accesorios'` final mandaba a accesorios los botines, los
+   tacones y los mocasines, porque el regex llevaba tilde y el catálogo no.
+   Ahora la lista está en lib/normalize.js y la usan los dos lados. */
+
+/* ═══════════════════════════════════════════
+   ESCÁNER EN TIENDA (Feature 32)
+   Dato B2B de máximo valor: intención de compra real
+═══════════════════════════════════════════ */
+/* «Estoy en la tienda mirando unas adidas Gazelle azules».
+   Lo que tiene que pasar, en este orden y sin esperar a nada:
+     1. Al instante (sin red): qué ha entendido Drobe —marca, modelo, color,
+        estilo—, si ya tiene algo así, y qué alternativas del MISMO ESTILO
+        tienen sentido para él, empezando por marcas que ya compra.
+     2. En uno o dos segundos: dónde está más barato ese mismo modelo, y el
+        precio de verdad de cada alternativa. Todo en una sola ronda.
+     3. Cuando llegue: el veredicto de la IA. No bloquea nada.
+   Antes era al revés: se esperaba a la IA y a hasta doce búsquedas en fila
+   antes de enseñar la primera línea, y las «alternativas» eran otras
+   zapatillas azules cualesquiera. */
+const CACHE_TIENDA=new Map();
+const PALABRAS_COLOR={Blanco:['blanco','blanca','blancas','white'],Negro:['negro','negra','negras','black'],Gris:['gris','grey','gray'],
+  Marino:['marino','navy'],Azul:['azul','azules','blue'],Verde:['verde','green'],'Kaki/Oliva':['kaki','khaki','olive','oliva'],
+  'Marrón':['marron','brown'],Beige:['beige'],Crudo:['crudo','cream','ecru'],Rojo:['rojo','roja','red','burdeos'],
+  Amarillo:['amarillo','amarilla','yellow'],Naranja:['naranja','orange'],Rosa:['rosa','pink'],Morado:['morado','morada','purple','lila'],Multicolor:[]};
+const colorBusqueda=c=>c?String(c).toLowerCase().replace('kaki/oliva','kaki').replace('marrón','marron'):'';
+const buscarEnGoogle=t=>`https://www.google.com/search?tbm=shop&q=${encodeURIComponent(t)}`;
+/* Cuando no hay un producto concreto que abrir (una alternativa sin precio en
+   vivo), se abre una TIENDA con la búsqueda del modelo hecha, no la página de
+   Google Shopping, que en el móvil se abre mal. Zalando porque es la que más
+   marcas y modelos tiene en España. */
+const buscarEnTienda=t=>`https://www.zalando.es/catalogo/?q=${encodeURIComponent(t)}`;
+/* Atributos de una oferta para que, al tocarla, se abra la ficha del producto
+   en la web de la tienda (ver `abrirOferta`). */
+const attrsOferta=o=>`href="${esc(o.link||'#')}" target="_blank" rel="noopener"${o.token?` data-tok="${esc(o.token)}" data-src="${esc(o.source||'')}"`:''}`;
+const eur=n=>n==null?'':(Math.round(n*100)/100).toLocaleString('es-ES',{minimumFractionDigits:n%1?2:0,maximumFractionDigits:2})+' €';
+
+async function buscarTienda(body){
+  const k=JSON.stringify(body);
+  if(CACHE_TIENDA.has(k)) return {...CACHE_TIENDA.get(k),deCache:true};
+  const ck=cloud.cacheKey(body);
+  if(session){ try{ const hit=await cloud.searchCacheGet(ck); if(hit&&hit.modo==='tienda'){ CACHE_TIENDA.set(k,hit); return {...hit,deCache:true}; } }catch(e){ logError('tienda.cacheGet',e); } }
+  try{
+    const ctrl=new AbortController(); const tm=setTimeout(()=>ctrl.abort(),12000);
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:ctrl.signal});
+    clearTimeout(tm);
+    const d=await r.json();
+    if(!d||!d.available) return {sinServicio:true,motivo:d&&d.reason};
+    const guardar={modo:'tienda',exacta:d.exacta||[],alternativas:d.alternativas||{},usados:d.usados||[],ms:d.ms};
+    CACHE_TIENDA.set(k,guardar);
+    if(session&&(guardar.exacta.length||Object.values(guardar.alternativas).some(x=>x.length))) cloud.searchCachePut(ck,guardar);
+    return {...guardar,errores:d.errores};
+  }catch(e){ logError('tienda.buscar',e); return {sinServicio:true,motivo:e.name==='AbortError'?'timeout':e.message}; }
+}
+
+function openScannerTienda(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='scanner'; el.style.zIndex='200';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="scb">${svg('back',20)}</button><span class="t">Estás en tienda</span></div>
+    <div class="title" style="font-size:28px;margin-bottom:6px">¿Qué estás mirando?</div>
+    <div class="sub" style="margin-bottom:16px">Escribe la marca y el modelo, o haz una foto. Te digo dónde está más barato y qué hay parecido de marcas que ya usas.</div>
+    <form class="sc-q" id="sc_form" autocomplete="off">
+      <input id="sc_q" placeholder="adidas gazelle azules" enterkeyhint="search" autocapitalize="off" autocorrect="off"/>
+      <button type="button" class="sc-cam" id="sc_photo_btn" aria-label="Hacer una foto">${svg('cam',20)}</button>
+    </form>
+    <input id="sc_photo" type="file" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"/>
+    <div class="row2" style="margin-top:10px">
+      <div class="field"><label>Precio que ves <span class="hint-i">opcional</span></label><input id="sc_price" inputmode="decimal" placeholder="120"/></div>
+      <div class="field"><label>Tienda <span class="hint-i">opcional</span></label><input id="sc_store" placeholder="Foot Locker"/></div>
+    </div>
+    <button class="btn dark" id="sc_go">${svg('target',18)} Buscar</button>
+    <div id="sc_out" style="margin-top:18px"></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#scb').onclick=()=>el.remove();
+  const $=sel=>el.querySelector(sel);
+  $('#sc_photo_btn').onclick=()=>$('#sc_photo').click();
+  $('#sc_form').onsubmit=e=>{ e.preventDefault(); $('#sc_go').click(); };
+
+  // Foto → la IA dice qué es, y si lo tiene claro, se busca sola.
+  $('#sc_photo').addEventListener('change',async ev=>{
+    const f=ev.target.files&&ev.target.files[0]; ev.target.value=''; if(!f)return;
+    const out=$('#sc_out');
+    out.innerHTML=`<div class="empty" style="padding-top:20px">${svg('load',26)}<div style="margin-top:10px">Mirando qué es…</div></div>`;
+    out.querySelector('svg')?.classList.add('spin');
+    try{
+      const img=await imageToBase64(f);
+      const r=depurarVision(await callAI(visionSystem(),'Identifica esta prenda con máxima precisión para buscarla en tiendas. Devuelve JSON.',img,{intentos:1}));
+      if(!r||r.detected===false||!r.cat){
+        out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>${r?'No la veo con claridad.':'No he podido analizar la foto'+(ultimoFalloIA?.status===503?' (el servicio de IA no está disponible ahora)':'')+'.'} Escribe la marca y el modelo arriba.</span></div>`;
+        return;
+      }
+      const texto=[r.brand, r.modelo?r.modelo.modelo:(r.cat||''), r.color?colorBusqueda(canonColor(r.color)):''].filter(Boolean).join(' ');
+      $('#sc_q').value=texto;
+      const claro=(r.confidence.cat||0)>=0.75&&(r.brandStatus==='leida'||r.modelo);
+      out.innerHTML=detectadoHTML(r)+(claro?'':`<div class="note" style="margin-top:10px">${svg('pen',18)}<span>Corrige arriba lo que no sea y pulsa Buscar.</span></div>`);
+      if(claro) $('#sc_go').click();
+    }catch(e){
+      logError('tienda.foto',e);
+      out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude leer la foto. Escribe la marca y el modelo arriba.</span></div>`;
+    }
+  });
+
+  let enCurso=0;
+  $('#sc_go').onclick=async function(){
+    const q=$('#sc_q').value.trim();
+    if(!q){ $('#sc_q').focus(); return; }
+    const idBusqueda=++enCurso;
+    const vigente=()=>idBusqueda===enCurso&&el.isConnected;
+    const price=parseFloat(String($('#sc_price').value).replace(',','.'))||null;
+    const storeName=$('#sc_store').value.trim();
+    const out=$('#sc_out');
+    const u=userContext();
+    const t0=performance.now();
+
+    // ── 1. Al instante
+    const p=parseBusqueda(q);
+    const brand=p.marca||'';
+    const alts=p.familia?alternativasModelo(p,{armario:store.garments,likedBrands:store.profile?.likedBrands||[],precioVisto:price,max:4}):[];
+    // Sin familia conocida: las marcas que ya tiene en ese mismo tipo de prenda.
+    const marcasSuyas=!alts.length&&p.grupo?[...store.garments.filter(g=>g.status!=='venta'&&(g.catGroup||grupoDeCat(g.cat))===p.grupo&&g.brand&&!(brand&&canonMarca(g.brand)===brand))
+      .reduce((m,g)=>m.set(canonMarca(g.brand),(m.get(canonMarca(g.brand))||0)+1),new Map())].sort((a,b)=>b[1]-a[1]).slice(0,3).map(([b])=>b):[];
+    const ya=yaTieneParecido(p,store.garments);
+    const colorTxt=colorBusqueda(p.color);
+    const fam=p.familia?FAMILIAS[p.familia]:null;
+
+    const chips=[brand,p.modelo?.modelo,p.color,fam?fam.nombre:(p.cat||'')].filter(Boolean);
+    let html=`<div class="sc-entiendo reveal">${chips.length?chips.map(c=>`<span>${esc(c)}</span>`).join(''):`<span>${esc(q)}</span>`}</div>`;
+    if(ya.length) html+=`<div class="sc-ya reveal">
+      <div class="sc-ya-t">${svg('spark',15)} ¿No tienes ya algo así?</div>
+      ${ya.map(x=>`<div class="sc-ya-r" data-g="${esc(x.g.id)}"><div class="sc-ya-ph">${x.g.img?`<img src="${esc(x.g.img)}" alt=""/>`:svg('shirt',18)}</div><div><b>${esc([x.g.brand,x.g.name].filter(Boolean).join(' '))}</b><span>${esc(x.motivo)}</span></div></div>`).join('')}
+    </div>`;
+    html+=`<div id="sc_verdict"></div>`;
+    html+=`<div class="shead"><h2>${esc(p.modelo?`${brand} ${p.modelo.modelo}`:brand||'Esta prenda')} · más barata</h2><span class="sc-t" id="sc_t"></span></div>
+      <div id="sc_exact">${[0,1,2].map(()=>`<div class="offer skel"><div class="offer-img"></div><div class="offer-info"><div class="sk l"></div><div class="sk s"></div></div><div class="sk p"></div></div>`).join('')}</div>`;
+    if(alts.length){
+      html+=`<div class="shead"><h2>Parecidas${fam?' · '+esc(fam.nombre.toLowerCase()):''}</h2></div>
+        <div class="sub" style="margin:-4px 0 10px">${alts.some(a=>a.motivos.some(m=>/Ya tienes|Ya compras/.test(m)))?'Del mismo estilo, empezando por marcas que ya usas.':'Del mismo estilo que lo que miras.'}</div>
+        ${alts.map(a=>`<a class="alt-card" data-alt="${esc(a.id)}" href="${esc(buscarEnTienda(`${a.marca} ${a.modelo} ${colorTxt}`.trim()))}" target="_blank" rel="noopener">
+          <div class="alt-main"><div class="alt-n">${esc(a.marca)} <b>${esc(a.modelo)}</b>${colorTxt?` <span class="alt-c">${esc(colorTxt)}</span>`:''}</div>
+            <div class="alt-why">${a.motivos.slice(0,2).map(m=>`<span>${esc(m)}</span>`).join('')}</div></div>
+          <div class="alt-p" id="altp_${esc(a.id)}"><span class="sk p"></span></div></a>`).join('')}`;
+    } else if(marcasSuyas.length){
+      html+=`<div class="shead"><h2>En marcas que ya usas</h2></div>
+        ${marcasSuyas.map(b=>`<a class="alt-card" data-alt="${esc(slug(b))}" href="${esc(buscarEnTienda(`${b} ${p.cat||''} ${colorTxt}`.trim()))}" target="_blank" rel="noopener">
+          <div class="alt-main"><div class="alt-n"><b>${esc(b)}</b> ${esc((p.cat||'').toLowerCase())}${colorTxt?` <span class="alt-c">${esc(colorTxt)}</span>`:''}</div>
+          <div class="alt-why"><span>Ya compras ${esc(b)}</span></div></div>
+          <div class="alt-p" id="altp_${esc(slug(b))}"><span class="sk p"></span></div></a>`).join('')}`;
+    } else {
+      html+=`<div id="sc_ai_alts"></div>`;
+    }
+    html+=`<div id="sc_used"></div>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="btn dark" id="sc_buy" style="flex:1">${svg('add',16)} Lo compro</button>
+        <button class="btn ghost" id="sc_no" style="flex:1">Lo dejo</button>
+      </div>`;
+    out.innerHTML=html;
+    out.querySelectorAll('.sc-ya-r[data-g]').forEach(r=>r.onclick=()=>openFicha(r.dataset.g));
+    this.innerHTML=`${svg('target',18)} Buscar otra`;
+
+    // ── 2. Precios: una sola ronda, todo en paralelo
+    const req=[brand,p.modelo?.modelo].filter(Boolean);
+    const colores=PALABRAS_COLOR[p.color]||[];
+    // v:2 — los resultados guardados antes no traían el token para abrir la
+    // tienda; cambiar la clave evita servir esos de la caché de 24 h.
+    const body={mode:'tienda',v:2,sex:u.sex,avgPrice:u.avgPrice,
+      exacta:{q:p.consulta,requiere:req,colores},
+      alternativas:alts.length?alts.slice(0,3).map(a=>({id:a.id,q:`${a.marca} ${a.modelo} ${colorTxt}`.trim(),requiere:[a.marca,a.modelo],colores}))
+        :marcasSuyas.map(b=>({id:slug(b),q:`${b} ${(p.cat||'').toLowerCase()} ${colorTxt}`.trim(),requiere:[b],colores})),
+      usados:!!store.profile?.consent_marketing};
+    const precios=buscarTienda(body);
+
+    // ── 3. Veredicto: cuando llegue
+    const sys=`Eres el asesor de compra de Drobe. El usuario está en una tienda. Usa SOLO lo que sabes de su armario y sus compras; si no lo sabes, no lo supongas. Sé directo. Devuelve SOLO JSON:
+{"veredicto":"comprar"|"dudoso"|"evitar","razon":"1-2 frases concretas"}`;
+    const usr=`${userContextPrompt()}\n${ya.length?'Ya tiene: '+ya.map(x=>x.g.brand+' '+x.g.name+' ('+x.motivo+')').join('; ')+'.':''}
+Mira en tienda: "${[brand,p.modelo?.modelo,p.color,p.cat].filter(Boolean).join(' ')||q}"${price?` por ${price}€`:''}${storeName?` en ${storeName}`:''}.`;
+    callAI(sys,usr,null,{intentos:1,timeout:12000}).then(r=>{
+      const box=out.querySelector('#sc_verdict'); if(!box||!vigente()||!r||!r.veredicto)return;
+      const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
+      const vt={comprar:'Cómpralo',dudoso:'Piénsalo',evitar:'Déjalo'}[r.veredicto]||'';
+      box.innerHTML=`<div class="advisor reveal"><div class="who"><div class="av">${dmark(15,"#F2F3F5")}</div><div class="nm">Veredicto<span>${esc(storeName||'en tienda')}</span></div>
+        <span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${esc(vt)}</span></div>
+        <div class="say" style="margin-top:8px">${esc(r.razon||'')}</div></div>`;
+    });
+
+    const d=await precios;
+    if(!vigente())return;
+    const secs=((performance.now()-t0)/1000).toFixed(1).replace('.',',');
+    const tEl=out.querySelector('#sc_t'); if(tEl&&!d.sinServicio)tEl.textContent=d.deCache?'al momento':`en ${secs} s`;
+    const ex=out.querySelector('#sc_exact');
+    const buscar=`<a class="offer" href="${esc(buscarEnGoogle(p.consulta))}" target="_blank" rel="noopener"><div class="offer-img">${svg('search',18)}</div><div class="offer-info"><div class="offer-t">Comparar «${esc(p.consulta)}»</div><div class="offer-s">Google Shopping</div></div><div class="offer-p">${svg('chev',18)}</div></a>`;
+    if(d.sinServicio){
+      ex.innerHTML=`<div class="note warn" style="margin-bottom:8px">${svg('spark',18)}<span>${d.motivo==='no_key'?'La búsqueda de precios no está configurada.':d.motivo==='timeout'?'Las tiendas han tardado demasiado en responder.':'Ahora mismo no puedo consultar precios.'} Abre la comparativa:</span></div>`+buscar;
+    } else if(d.exacta.length){
+      const mejor=d.exacta[0];
+      const ahorro=price&&mejor.price_value?Math.round(price-mejor.price_value):null;
+      ex.innerHTML=(ahorro&&ahorro>0?`<div class="save-banner">${svg('tag',18)} <span>La tienes <b>${ahorro} € más barata</b> en ${esc(mejor.source)}</span></div>`:
+          price&&mejor.price_value&&mejor.price_value>=price?`<div class="note" style="margin-bottom:10px">${svg('check',18)}<span>${eur(price)} ya es buen precio: no la he encontrado más barata.</span></div>`:'')
+        +d.exacta.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" ${attrsOferta(o)}>
+          <div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}" alt=""/>`:svg('tag',20)}</div>
+          <div class="offer-info"><div class="offer-t">${esc(o.title)}</div><div class="offer-s">${esc(o.source)}${i===0?' · la más barata':''}${o.color_ok===false?' · <span class="otro-color">otro color</span>':''}</div></div>
+          <div class="offer-p">${esc(o.price||'')}</div></a>`).join('');
+    } else {
+      ex.innerHTML=`<div class="sub" style="margin-bottom:8px">No encuentro ${esc(p.modelo?'ese modelo':'esa prenda')} a la venta en tiendas online ahora mismo.</div>`+buscar;
+    }
+    // precio real de cada alternativa, en su tarjeta
+    out.querySelectorAll('.alt-card[data-alt]').forEach(card=>{
+      const slot=card.querySelector('.alt-p'); if(!slot)return;
+      const lista=(d.alternativas&&d.alternativas[card.dataset.alt])||[];
+      const a=alts.find(x=>x.id===card.dataset.alt);
+      if(lista.length){
+        const o=lista[0];
+        card.href=o.link;
+        if(o.token){ card.dataset.tok=o.token; card.dataset.src=o.source||''; }
+        slot.innerHTML=`<span class="alt-pv">${esc(o.price||'')}</span><span class="alt-ps">${esc(o.source)}</span>`;
+        if(price&&o.price_value&&o.price_value<price) slot.insertAdjacentHTML('beforeend',`<span class="alt-save">−${Math.round(price-o.price_value)} €</span>`);
+      } else {
+        slot.innerHTML=a?`<span class="alt-pv suele">~${a.precio} €</span><span class="alt-ps">suele costar · ver en Zalando</span>`:`<span class="alt-ps">Ver en Zalando</span>`;
+      }
+    });
+    if(d.usados&&d.usados.length){
+      out.querySelector('#sc_used').innerHTML=`<div class="shead" style="margin-top:18px"><h2>${svg('sync',15)} De segunda mano</h2></div>`
+        +d.usados.map(o=>`<a class="offer" ${attrsOferta(o)}><div class="offer-img">${o.thumbnail?`<img loading="lazy" src="${esc(o.thumbnail)}" alt=""/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${esc(o.title)}</div><div class="offer-s">${esc(o.source)}</div></div><div class="offer-p">${esc(o.price||'')}</div></a>`).join('');
+    }
+    // Sin familia ni marcas propias: la IA propone, y solo se enseña lo que
+    // sea de una marca real del catálogo.
+    const aiBox=out.querySelector('#sc_ai_alts');
+    if(aiBox){
+      aiBox.innerHTML=`<div class="shead"><h2>Parecidas</h2></div><div class="empty" style="padding:10px 0">${svg('load',20)}</div>`;
+      aiBox.querySelector('svg')?.classList.add('spin');
+      const r=await callAI(`Eres un experto en moda del mercado español. Propón alternativas REALES y concretas (marca y modelo que existan) a la prenda que mira el usuario, del mismo estilo y ${price?`más baratas de ${price}€`:'de precio parecido o menor'}. Prefiere, si encajan, estas marcas que el usuario ya compra: ${(u.topBrands||[]).join(', ')||'ninguna conocida'}. Nunca Shein, Temu ni AliExpress. Devuelve SOLO JSON: {"alternativas":[{"marca":"","modelo":"","por_que":""}]}`,
+        `Mira: "${q}"${p.cat?` (${p.cat})`:''}.`,null,{intentos:1,timeout:12000});
+      if(!vigente())return;
+      const lista=(r&&Array.isArray(r.alternativas)?r.alternativas:[]).map(a=>({...a,marca:resolverMarca(a.marca)})).filter(a=>a.marca.via==='catalogo'&&a.modelo).slice(0,3);
+      aiBox.innerHTML=lista.length?`<div class="shead"><h2>Parecidas</h2></div>`+lista.map(a=>`<a class="alt-card" href="${esc(buscarEnTienda(`${a.marca.marca} ${a.modelo} ${colorTxt}`.trim()))}" target="_blank" rel="noopener">
+          <div class="alt-main"><div class="alt-n">${esc(a.marca.marca)} <b>${esc(a.modelo)}</b></div><div class="alt-why"><span>${esc(a.por_que||'Sugerencia de la IA')}</span></div></div>
+          <div class="alt-p"><span class="alt-ps">Ver en Zalando</span></div></a>`).join('')+`<div class="sub" style="font-size:11px;margin-top:6px">Sugerencias de la IA, sin precio en vivo.</div>`:'';
+    }
+
+    trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'analyzed',session_id:Date.now().toString(36)});
+    /* El motivo del rechazo es la señal más valiosa del escáner: enseña a Drobe
+       qué NO recomendar. Si el usuario no lo dice, se deduce de lo que sabemos. */
+    const guessReason=()=>{
+      if(ya.length) return 'already_have';
+      try{
+        const P=tasteProfile();
+        const band=P.priceBands[p.grupo]||P.globalBand;
+        if(price&&band&&price>(band.median||band.avg)*P.priceCeilingFactor) return 'too_expensive';
+      }catch(e){ logError('guessReason',e); }
+      return 'user_choice';
+    };
+    const logScan=(bought,rejection)=>{
+      store.scanLog=store.scanLog||[];
+      store.scanLog.unshift({brand, model:p.modelo?.modelo||'', verdict:'', bought, rejection:bought?null:(rejection||null),
+        price:price||null, cat:p.grupo||null, store:storeName||null, at:new Date().toISOString()});
+      if(store.scanLog.length>200)store.scanLog.length=200;
+      save();
+    };
+    out.querySelector('#sc_buy').onclick=()=>{
+      logScan(true); haptic();
+      trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'bought'});
+      el.remove(); go('add');
+      setTimeout(()=>showPrenda(document.getElementById('main'),{brand,name:p.modelo?p.modelo.modelo:q,cat:p.cat,color:p.color,price,model:p.modelo?.modelo},null),100);
+    };
+    out.querySelector('#sc_no').onclick=()=>{
+      const reason=guessReason();
+      logScan(false,reason);
+      trackScanEvent({query:q,brand,price_seen:price,store_name:storeName,action:'rejected',rejection_reason:reason});
+      el.remove();
+    };
+  };
+}
+
+/* ═══════════════════════════════════════════
+   MALETA
+═══════════════════════════════════════════ */
+let trip={dest:'',lat:null,lon:null,dateFrom:null,dateTo:null,days:3,plan:'Ciudad',acts:[],weatherData:null,calY:null,calM:null};
+
+function openMaleta(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='trip';
+  document.body.appendChild(el); maletaStep1(el);
+}
+
+function maletaStep1(el){
+  el.innerHTML=`
+    <div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+      <div class="backbar"><button id="mb">${svg('back',20)}</button><span class="t">Preparar viaje</span></div>
+      <div class="trip-hero">${svg('plane',32)}</div>
+      <div class="title" style="font-size:28px;margin-bottom:6px">¿A dónde vas?</div>
+      <div class="sub" style="margin-bottom:20px">Drobe consultará el tiempo real y preparará tu maleta.</div>
+      <div class="field"><label>Destino</label>
+        <input id="dest" value="${esc(trip.dest)}" placeholder="París, Lisboa, Tokio…" autocomplete="off"/>
+        <div id="sugg" class="dest-sugg"></div></div>
+      <div class="shead" style="margin-top:8px"><h2>Duración</h2></div>
+      <div class="row2">
+        <div class="stat"><div class="l">Salida</div><div class="n" style="font-size:18px" id="t_from">${trip.dateFrom||'—'}</div></div>
+        <div class="stat"><div class="l">Regreso</div><div class="n" style="font-size:18px" id="t_to">${trip.dateTo||'—'}</div></div>
+      </div>
+      <div id="cal" class="trip-cal"></div>
+      <button class="btn dark" id="next1" style="margin-top:20px">${svg('chev',18)} Siguiente</button>
+      ${(store.maletas||[]).length?`<button class="btn ghost" id="seemaletas" style="margin-top:10px">${svg('pack',18)} Mis maletas (${store.maletas.length})</button>`:''}
+    </div>`;
+  el.querySelector('#mb').onclick=()=>el.remove();
+  el.querySelector('#seemaletas')?.addEventListener('click',()=>openMaletasGuardadas());
+  buildCalendar(el);
+  el.querySelector('#dest').addEventListener('input',e=>suggestDest(e.target.value,el.querySelector('#sugg'),el));
+  el.querySelector('#next1').onclick=()=>{ trip.dest=el.querySelector('#dest').value; if(trip.dest&&trip.days>0)maletaStep2(el); };
+}
+
+let _destTimer=null;
+function suggestDest(q,sugg,el){
+  clearTimeout(_destTimer);
+  if(!q||q.length<2){sugg.innerHTML='';return;}
+  _destTimer=setTimeout(async()=>{
+    try{
+      const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=es`;
+      const r=await fetch(url);
+      if(!r.ok)throw 0;
+      const data=await r.json();
+      if(!data||!data.length){sugg.innerHTML='';return;}
+      sugg.innerHTML=data.slice(0,5).map(p=>{
+        const name=p.display_name.split(',').slice(0,2).join(', ');
+        return `<div class="sugg-item" data-lat="${p.lat}" data-lon="${p.lon}" data-name="${esc(name)}">${svg('plane',15)} ${name}</div>`;
+      }).join('');
+      sugg.querySelectorAll('.sugg-item').forEach(item=>item.onclick=()=>{
+        trip.lat=parseFloat(item.dataset.lat); trip.lon=parseFloat(item.dataset.lon);
+        trip.dest=item.dataset.name;
+        el.querySelector('#dest').value=item.dataset.name; sugg.innerHTML='';
+      });
+    }catch(e){sugg.innerHTML='';}
+  },350);
+}
+
+function buildCalendar(el){
+  const cal=el.querySelector('#cal'); if(!cal)return;
+  const today=new Date(); const todayKey=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  if(trip.calY==null){trip.calY=today.getFullYear();trip.calM=today.getMonth();}
+  const year=trip.calY, month=trip.calM;
+  const first=new Date(year,month,1).getDay()||7;
+  const days=new Date(year,month+1,0).getDate();
+  const months=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const atCurrentMonth=year===today.getFullYear()&&month===today.getMonth();
+  cal.innerHTML=`
+    <div class="cal-head">
+      <button class="cal-nav" id="cal_prev" ${atCurrentMonth?'disabled':''} aria-label="Mes anterior">‹</button>
+      <span>${months[month]} ${year}</span>
+      <button class="cal-nav" id="cal_next" aria-label="Mes siguiente">›</button>
+    </div>
+    <div class="cal-grid">
+      ${['L','M','X','J','V','S','D'].map(d=>`<div class="cal-day-name">${d}</div>`).join('')}
+      ${Array(first-1).fill('<div></div>').join('')}
+      ${Array.from({length:days},(_,i)=>{
+        const d=i+1,full=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const isFrom=trip.dateFrom===full,isTo=trip.dateTo===full;
+        const inRange=trip.dateFrom&&trip.dateTo&&full>trip.dateFrom&&full<trip.dateTo;
+        const past=full<todayKey;
+        return `<button class="cal-day${isFrom?' from':''}${isTo?' to':''}${inRange?' in':''}" data-date="${full}" ${past?'disabled':''}>${d}</button>`;
+      }).join('')}
+    </div>`;
+  const prev=cal.querySelector('#cal_prev'),next=cal.querySelector('#cal_next');
+  if(prev)prev.onclick=()=>{ if(month===0){trip.calY--;trip.calM=11;}else trip.calM--; buildCalendar(el); };
+  if(next)next.onclick=()=>{ if(month===11){trip.calY++;trip.calM=0;}else trip.calM++; buildCalendar(el); };
+  cal.querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>{
+    const d=b.dataset.date;
+    if(!trip.dateFrom||trip.dateTo){trip.dateFrom=d;trip.dateTo=null;}
+    else if(d>trip.dateFrom){trip.dateTo=d;}
+    else if(d<trip.dateFrom){trip.dateFrom=d;}
+    else{trip.dateTo=d;}
+    if(trip.dateFrom&&trip.dateTo){ const ms=new Date(trip.dateTo)-new Date(trip.dateFrom); trip.days=Math.max(1,Math.round(ms/86400000)+1); }
+    else{ trip.days=1; }
+    const tf=el.querySelector('#t_from'),tt=el.querySelector('#t_to');
+    if(tf)tf.textContent=trip.dateFrom||'—';
+    if(tt)tt.textContent=trip.dateTo||'—';
+    buildCalendar(el);
+  });
+}
+
+async function maletaStep2(el){
+  /* Se llega aquí desde el paso 1 (botón «Siguiente») y TAMBIÉN desde la maleta
+     ya hecha, con la flecha atrás. En ese segundo caso no existe #next1: esta
+     función hacía `el.querySelector('#next1').disabled=true` sobre null,
+     reventaba, y la flecha de volver se quedaba muerta. */
+  const next=el.querySelector('#next1');
+  if(next){ next.disabled=true; next.innerHTML=svg('load',18)+' Consultando el tiempo…'; next.querySelector('svg')?.classList.add('spin'); }
+  let wx=null;
+  const clave=`${trip.lat},${trip.lon}`;
+  if(trip.weatherData&&trip.weatherKey===clave){ wx=trip.weatherData; }   // al volver atrás no se repite la consulta
+  else if(trip.lat&&trip.lon){
+    try{
+      const url=`https://api.open-meteo.com/v1/forecast?latitude=${trip.lat}&longitude=${trip.lon}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weathercode&timezone=auto&forecast_days=14`;
+      const r=await fetch(url); wx=await r.json(); trip.weatherData=wx; trip.weatherKey=clave;
+    }catch(e){ wx=null; logError('maleta.tiempo',e); }
+  }
+  if(!el.isConnected)return;   // cerró la maleta mientras llegaba el tiempo
+  const tMax=wx?.daily?.temperature_2m_max?.[0]??null;
+  const tMin=wx?.daily?.temperature_2m_min?.[0]??null;
+  const rainDays=wx?.daily?.precipitation_probability_max?.filter(p=>p>50).length??0;
+  const tAvg=tMax!=null&&tMin!=null?Math.round((tMax+tMin)/2):null;
+  trip.tAvg=tAvg; trip.rainDays=rainDays;
+  el.innerHTML=`
+    <div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+      <div class="backbar"><button id="mb2">${svg('back',20)}</button><span class="t">El tiempo</span></div>
+      ${tAvg!=null?`<div class="wx-card">
+        <div class="wx-top">${svg('sun',28)}<div><div class="wx-t">${trip.dest}</div><div class="wx-s">${tMin}°–${tMax}°C · ${rainDays} día(s) de lluvia</div></div></div>
+        <div class="wx-desc">${buildWxSummary(trip.dest,tMin,tMax,rainDays)}</div></div>`
+      :`<div class="note warn">${svg('sun',18)}<span>No pude obtener el tiempo para este destino.</span></div>`}
+      <div class="shead"><h2>Motivo del viaje</h2></div>
+      <div class="chips">${TRIP_PLANS.map(p=>`<button class="chip${trip.plan===p?' on':''}" data-plan="${p}">${p}</button>`).join('')}</div>
+      <div class="shead"><h2>Actividades</h2></div>
+      <div class="chips" style="flex-wrap:wrap">${TRIP_ACTS.map(a=>`<button class="chip${trip.acts.includes(a)?' on':''}" data-act="${a}">${a}</button>`).join('')}</div>
+      <button class="btn dark" id="next2" style="margin-top:20px">${svg('pack',18)} Preparar maleta</button>
+    </div>`;
+  el.querySelector('#mb2').onclick=()=>maletaStep1(el);
+  el.querySelectorAll('[data-plan]').forEach(b=>b.onclick=()=>{trip.plan=b.dataset.plan;el.querySelectorAll('[data-plan]').forEach(x=>x.className='chip'+(x.dataset.plan===trip.plan?' on':''));});
+  el.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>{const a=b.dataset.act;const i=trip.acts.indexOf(a);if(i>=0)trip.acts.splice(i,1);else trip.acts.push(a);b.className='chip'+(trip.acts.includes(a)?' on':'');});
+  el.querySelector('#next2').onclick=()=>maletaPackPremium(el);
+}
+
+function buildWxSummary(dest,tMin,tMax,rainDays){
+  if(tMin==null)return 'Tiempo desconocido.';
+  const avg=Math.round((tMin+tMax)/2);
+  let s=`Durante tu viaje a ${dest} las temperaturas estarán entre ${tMin}° y ${tMax}°C.`;
+  if(rainDays>2)s+=` Se esperan lluvias ${rainDays} días — incluye impermeable.`;
+  else if(rainDays>0)s+=` Alguna lluvia puntual.`;
+  if(avg>26)s+=` Hará bastante calor: prioriza tejidos ligeros.`;
+  else if(avg<10)s+=` Frío considerable: necesitarás capas y abrigo.`;
+  return s;
+}
+
+async function maletaPackPremium(el){
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="mb3">${svg('back',20)}</button><span class="t">${trip.dest||'Tu viaje'} · ${trip.days} días</span></div>
+    <div id="packwrap"></div></div>`;
+  el.querySelector('#mb3').onclick=()=>maletaStep2(el);
+  const plan=buildMaletaPlan();
+  const wrap=el.querySelector('#packwrap');
+  wrap.innerHTML=`
+    <div class="suitcase">
+      <div class="handle"></div>
+      <div class="case-body" id="casebody">
+        <div class="sub" style="grid-column:1/4;color:var(--on-noir-2);text-align:center;padding:28px 0 14px">${svg('pack',24)} Preparando maleta…</div>
+      </div>
+    </div>
+    <div id="tripsum" style="opacity:0;transition:opacity .6s var(--ease)"></div>`;
+  const body=wrap.querySelector('#casebody');
+  await new Promise(r=>setTimeout(r,300));
+  body.innerHTML='';
+  for(let i=0;i<plan.sel.length;i++){
+    const g=plan.sel[i];
+    await new Promise(r=>setTimeout(r,90));
+    const tile=document.createElement('div'); tile.className='packtile'; tile.style.animationDelay=`${i*0.08}s`;
+    tile.innerHTML=`<img src="${g.img||'./assets/silbon-raquetas-white.png'}"/>`;
+    body.appendChild(tile);
+  }
+  await new Promise(r=>setTimeout(r,plan.sel.length*90+500));
+  const looks=Math.max(plan.tops.length,1)*Math.max(plan.bottoms.length,1);
+  const weight=plan.sel.reduce((s,g)=>s+gWeight(g.cat),0);
+  const must=plan.sel.slice().sort((a,b)=>(b.worn||0)-(a.worn||0)).slice(0,3);
+  const missing=[];
+  if(!plan.bottoms.length)missing.push('Sin pantalones en el armario.');
+  if(!plan.shoes.length)missing.push('Sin calzado registrado.');
+  if(trip.rainDays>1&&!plan.layers.length)missing.push('Sin impermeable o chaqueta de abrigo.');
+  const sum=wrap.querySelector('#tripsum');
+  sum.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:18px">
+      <div class="stat"><div class="n">${looks}</div><div class="l">Looks</div></div>
+      <div class="stat"><div class="n">${plan.sel.length}</div><div class="l">Prendas</div></div>
+      <div class="stat"><div class="n">${weight.toFixed(1)} kg</div><div class="l">Peso est.</div></div>
+    </div>
+    ${must.length?`<div class="shead"><h2>Imprescindibles</h2></div>${must.map(g=>`<div class="chk"><span class="ic">${svg('check',16)}</span><span><b>${g.brand}</b> ${g.name}</span></div>`).join('')}`:''}
+    ${missing.length?`<div class="shead"><h2>Ten en cuenta</h2></div>${missing.map(x=>`<div class="chk warn"><span class="ic">${svg('spark',16)}</span><span>${x}</span></div>`).join('')}`:''}
+    <div class="savebox">
+      <input id="mname" placeholder="${trip.dest||'Mi viaje'}" value="${esc(trip.dest||'')}" />
+      <button class="btn dark" id="savemaleta">${svg('pack',18)} Guardar maleta</button>
+    </div>
+    <button class="btn ghost" id="redo" style="margin-top:10px">Nueva maleta</button>`;
+  sum.style.opacity='1';
+  sum.querySelector('#redo').onclick=()=>maletaStep1(el);
+  sum.querySelector('#savemaleta').onclick=function(){
+    const nm=(sum.querySelector('#mname').value||trip.dest||'Mi viaje').trim();
+    saveMaleta({name:nm,dest:trip.dest,days:trip.days,plan:trip.plan,items:plan.sel.map(g=>g.id),looks,weight:Number(weight.toFixed(1))});
+    this.disabled=true; this.innerHTML=`${svg('check',18)} Guardada`;
+    // Guardada, la salida natural es cerrar: la flecha de arriba pasa a cerrar
+    // el viaje en vez de volver a editarlo, y hay un botón para ver las maletas.
+    const back=el.querySelector('#mb3'); if(back){ back.onclick=()=>el.remove(); back.setAttribute('aria-label','Cerrar'); }
+    if(!sum.querySelector('#vermaletas')){
+      const b=document.createElement('button'); b.className='btn ghost'; b.id='vermaletas'; b.style.marginTop='10px';
+      b.innerHTML=`${svg('pack',18)} Ver mis maletas`; b.onclick=()=>{ el.remove(); openMaletasGuardadas(); };
+      sum.appendChild(b);
+    }
+  };
+}
+
+function saveMaleta(mal){
+  store.maletas=store.maletas||[];
+  mal.id='m'+Date.now()+Math.random().toString(36).slice(2,5);
+  mal.createdAt=new Date().toISOString();
+  store.maletas.unshift(mal);
+  save();
+  if(session) cloud.saveMaletaCloud(mal).then(r=>{ if(r&&!r.ok) showSyncWarning(r.reason); });
+}
+function deleteMaleta(id){
+  store.maletas=(store.maletas||[]).filter(m=>m.id!==id);
+  save();
+  if(session) cloud.deleteMaletaCloud(id);
+}
+function openMaletasGuardadas(){
+  const mals=store.maletas||[];
+  const el=document.createElement('div'); el.className='ficha'; el.id='maletas';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="mgb">${svg('back',20)}</button><span class="t">Mis maletas</span></div>
+    ${mals.length?'':`<div class="empty" style="padding-top:60px">${svg('pack',28)}<div style="margin-top:12px">Aún no has guardado ninguna maleta.</div></div>`}
+    ${mals.map(m=>{
+      const its=(m.items||[]).map(id=>findG(id)).filter(Boolean);
+      return `<div class="maleta-card" data-id="${m.id}">
+        <div class="maleta-head"><div><div class="maleta-n">${esc(m.name)}</div><div class="maleta-s">${m.dest||''}${m.days?' · '+m.days+' días':''} · ${its.length} prendas</div></div>
+          <button class="maleta-del" data-del="${m.id}">${svg('trash',16)}</button></div>
+        <div class="maleta-thumbs">${its.slice(0,6).map(g=>`<div class="mt"><img loading="lazy" decoding="async" src="${g.img||''}"/></div>`).join('')}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#mgb').onclick=()=>el.remove();
+  el.querySelectorAll('[data-del]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteMaleta(b.dataset.del); el.remove(); openMaletasGuardadas(); });
+}
+
+function buildMaletaPlan(){
+  const days=trip.days,tAvg=trip.tAvg??18,rainDays=trip.rainDays??0;
+  const cold=tAvg<14||rainDays>2;
+  const pool=store.garments.filter(g=>g.status!=='venta');
+  const grp=g=>g.catGroup||catToGroup(g.cat||'');
+  const isTop=g=>['Camisetas','Polos','Camisas'].includes(grp(g));
+  const isLayer=g=>['Jerséis/Sudaderas','Chaquetas/Abrigos'].includes(grp(g));
+  const isBottom=g=>['Pantalones','Shorts/Bermudas','Faldas/Vestidos'].includes(grp(g));
+  const isShoe=g=>grp(g)==='Calzado';
+  const score=g=>{ let s=(g.worn||0)*0.5; if(NEUTRAL_COLORS.includes(g.color))s+=8; const seasonOk=g.season==='Todo el año'||(cold?g.season==='Otoño/Invierno':g.season==='Primavera/Verano'); if(seasonOk)s+=10; else s-=4; if(trip.acts.includes('Deporte')&&g.formality==='Deporte')s+=6; if(trip.plan==='Boda'&&g.formality==='Formal')s+=12; return s; };
+  const take=(arr,n)=>arr.slice().sort((a,b)=>score(b)-score(a)).slice(0,Math.max(0,n));
+  const nTops=Math.max(2,Math.ceil(days*0.9)),nBottoms=Math.max(1,Math.ceil(days/3)+1),nLayers=cold?2:1,nShoes=days>5?2:1;
+  const tops=take(pool.filter(isTop),nTops),layers=take(pool.filter(isLayer),nLayers),bottoms=take(pool.filter(isBottom),nBottoms),shoes=take(pool.filter(isShoe),nShoes);
+  const seen={},sel=[];
+  [...tops,...layers,...bottoms,...shoes].forEach(g=>{ if(!seen[g.id]){seen[g.id]=1;sel.push(g);} });
+  if(!sel.length&&pool.length) take(pool,Math.min(pool.length,Math.max(3,Math.ceil(days*0.9)))).forEach(g=>sel.push(g));
+  return {sel,tops,layers,bottoms,shoes};
+}
+
+/* ═══════════════════════════════════════════
+   ESTILISTA
+═══════════════════════════════════════════ */
+let stylistMsg=null;
+// Tiempo REAL de Barcelona (Open-Meteo, sin API key). Nunca inventamos:
+// hasta que llega el dato, temp/label son null y no se muestran.
+const WEATHER={temp:null,label:null,city:'Barcelona',lat:41.3874,lon:2.1686,loaded:false};
+const WMO={0:'Despejado',1:'Casi despejado',2:'Parcialmente nublado',3:'Nublado',45:'Niebla',48:'Niebla',51:'Llovizna',53:'Llovizna',55:'Llovizna',61:'Lluvia',63:'Lluvia',65:'Lluvia fuerte',71:'Nieve',73:'Nieve',75:'Nieve',80:'Chubascos',81:'Chubascos',82:'Chubascos fuertes',95:'Tormenta',96:'Tormenta',99:'Tormenta'};
+async function loadWeather(){
+  try{
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${WEATHER.lat}&longitude=${WEATHER.lon}&current=temperature_2m,weathercode&timezone=auto`;
+    const r=await fetch(url); const d=await r.json();
+    const t=d?.current?.temperature_2m, code=d?.current?.weathercode;
+    if(typeof t==='number'){
+      WEATHER.temp=Math.round(t);
+      WEATHER.label=WMO[code]||'';
+      WEATHER.loaded=true;
+      // repintar solo el armario si está visible (sin recrear toda la app)
+      if(route==='armario'){ const eb=document.querySelector('#main .eyebrow'); if(eb)eb.textContent=`${WEATHER.city} · ${WEATHER.temp}°`; }
+    }
+  }catch(e){ /* sin conexión: no mostramos temperatura inventada */ }
+}
+function pickOutfit(){
+  const t=WEATHER.temp;
+  // si no hay dato de tiempo aún, elegimos algo neutro sin asumir frío/calor
+  const cold=t!=null&&t<15;
+  const top=cold?store.garments.find(g=>g.catGroup==='Jerséis/Sudaderas'&&g.status==='uso'):store.garments.find(g=>g.catGroup==='Camisetas'&&g.status==='uso');
+  const s=store.garments.find(g=>g.catGroup==='Camisetas'&&g.status==='uso'&&g!==top);
+  return [top,s].filter(Boolean);
+}
+function vEstilista(m){
+  /* Fuera «¿Qué vendo?». Ordenaba el armario por coste por uso y proponía las
+     tres peores: un ranking, no un consejo. No sabía si esa prenda es de la
+     boda de tu hermano ni si la estación acaba de cambiar, y proponer vender
+     algo que acabas de comprar quema la confianza en todo lo demás que dice el
+     estilista. La decisión de vender se toma en la ficha de la prenda, con la
+     prenda delante, que es donde tiene sentido. */
+  const intents=[['hoy','¿Qué me pongo hoy?'],['dedonde','¿De dónde es?'],['viaje','Preparar viaje'],['tienda','Estoy en tienda'],['comprar','¿Me lo compro?']];
+  m.innerHTML=`<div class="reveal"><div class="eyebrow">Estilista</div>
+    <div class="title">Tu asesor<br>de imagen</div>
+    <div class="sub">Decisiones reales sobre tu ropa. Nunca sobre la que no tienes.</div></div>
+    <div class="intent reveal" style="animation-delay:.05s">${intents.map(x=>`<button data-i="${x[0]}">${x[1]}</button>`).join('')}</div>
+    <div id="adv">${advisorCard(stylistMsg||defaultAdvice())}</div>`;
+  m.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.i==='dedonde'){openDeDonde();return;}
+    if(b.dataset.i==='viaje'){openMaleta();return;}
+    if(b.dataset.i==='tienda'){openScannerTienda();return;}
+    if(b.dataset.i==='comprar'){openAsesorCompra();return;}
+    const a=document.getElementById('adv'); a.style.opacity='0';
+    setTimeout(()=>{stylistMsg=advice(b.dataset.i);a.innerHTML=advisorCard(stylistMsg);a.style.transition='opacity .4s var(--ease)';a.style.opacity='1';bindOutfit(a);},170);
+  });
+  bindOutfit(document.getElementById('adv'));
+}
+const bindOutfit=scope=>scope.querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>openFicha(b.dataset.o));
+const defaultAdvice=()=>{
+  const hasWx = WEATHER.temp!=null;
+  const say = hasWx
+    ? `Con ${WEATHER.temp}° y ${(WEATHER.label||'').toLowerCase()} en ${WEATHER.city}, algodón limpio en neutros. Va contigo y con el día.`
+    : `Hoy, algo sencillo en neutros: algodón limpio que combina con casi todo. Va contigo y con el día.`;
+  return {say, items:pickOutfit()};
+};
+function advice(k){
+  return defaultAdvice();
+}
+const advisorCard=a=>`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F2F3F5")}</div><div class="nm">Estilista Drobe<span>Solo con tu armario</span></div></div><div class="say">${a.say}</div><div class="outfit">${(a.items||[]).map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/></div><div class="l">${g.brand}</div></div>`).join('')}</div></div>`;
+
+/* ═══════════════════════════════════════════
+   ASESOR DE COMPRA
+═══════════════════════════════════════════ */
+function wardrobeSummary(){ return store.garments.filter(g=>g.status!=='venta').map(g=>`${g.cat} ${g.color} (${g.brand})`).join(', '); }
+/* Cada recomendación enseña por qué está ahí. No es adorno: si Drobe falla la
+   puntería, el usuario ve el motivo y nosotros podemos corregirlo. */
+const offerRowHTML=o=>{
+  const reasons=(o._reasons||[]).slice(0,2);
+  const warn=(o._warnings||[])[0];
+  const sc=typeof o._score==='number'?o._score:null;
+  return `<a class="offer" ${attrsOferta(o)}>
+    <div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}"/>`:svg('tag',20)}</div>
+    <div class="offer-info">
+      <div class="offer-t">${esc(o.title||'')}</div>
+      <div class="offer-s">${esc(o.source||'')}</div>
+      ${reasons.length?`<div class="offer-why">${reasons.map(r=>`<span>${esc(r)}</span>`).join('')}</div>`:''}
+      ${warn?`<div class="offer-warn">${esc(warn)}</div>`:''}
+    </div>
+    <div class="offer-right">
+      <div class="offer-p">${esc(o.price||'')}</div>
+      ${sc!==null?`<div class="offer-score ${sc>=88?'hi':''}">${sc}</div>`:''}
+    </div></a>`;
+};
+/* añadido de segunda mano: SIEMPRE después de lo nuevo, nunca mezclado */
+async function appendUsedSection(container,params){
+  if(!store.profile?.consent_marketing)return; // el usuario decide si quiere sugerencias extra
+  const used=await searchOffersExtensive({...params,channel:'used'});
+  if(!container.isConnected)return;
+  const items=curateOffers(used?[...(used.exact||[]),...(used.alternatives||[])]:[],{threshold:70});
+  if(!items.length)return;
+  const div=document.createElement('div');
+  div.innerHTML=`<div class="shead" style="margin-top:18px"><h2>${svg('sync',15)} Y en segunda mano</h2></div><div class="sub" style="margin:-4px 0 10px">Mismo estilo, mejor precio. Vinted, Wallapop y similares.</div>`+items.slice(0,3).map(offerRowHTML).join('');
+  container.appendChild(div);
+}
+async function searchOffersExtensive({query,brand,productType,maxPrice,ownedBrands,sex,channel,avgPrice}){
+  // las marcas que el usuario ha dicho que le gustan se buscan SIEMPRE, junto a las suyas
+  const liked=(store.profile?.likedBrands||[]).filter(Boolean);
+  ownedBrands=[...new Set([...(liked.slice(0,3)),...(ownedBrands||[])])].slice(0,6);
+  const params={query,brand,productType,maxPrice,ownedBrands,sex,channel,avgPrice,v:2};
+  const key=cloud.cacheKey(params);
+  // la curación de estilista es PERSONAL: se aplica después de la caché,
+  // que es compartida y debe guardar resultados crudos
+  const curate=d=>({exact:d.exact||[],alternatives:(channel==='used')?(d.alternatives||[]):curateOffers(d.alternatives||[],{threshold:78,brandHints:[brand].filter(Boolean)})});
+  // 1) caché compartida (24h): instantánea y no gasta cuota
+  if(session){
+    const hit=await cloud.searchCacheGet(key);
+    if(hit) return curate(hit);
+  }
+  try{
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(params)});
+    const d=await r.json();
+    if(!d||!d.available)return null;
+    if(session&&((d.exact||[]).length||(d.alternatives||[]).length)) cloud.searchCachePut(key,{exact:d.exact||[],alternatives:d.alternatives||[]});
+    return curate(d);
+  }catch(e){ return null; }
+}
+function openAsesorCompra(){ const el=document.createElement('div'); el.className='ficha'; el.id='asesor'; renderAsesorForm(el); document.body.appendChild(el); }
+
+function renderAsesorForm(el,prefill={}){
+  /* Este formulario tenía sus propias listas de tipos, colores, cortes y
+     materiales — cuatro vocabularios paralelos al del armario. Tenía "Camisa"
+     y "Zapatillas deportivas", que no existen en el catálogo, así que lo que
+     pedías aquí no se podía cruzar con lo que tienes allí. Ahora bebe de la
+     misma fuente, y quién es pantalón o calzado lo dice el catálogo en vez de
+     seis expresiones regulares sobre la etiqueta. */
+  const TALLAS_ROPA=['XS','S','M','L','XL','XXL'];
+  const TALLAS_PANTALON=['28','29','30','31','32','33','34','36','38'];
+  const TALLAS_ZAPATO=['38','39','40','41','42','43','44','45'];
+  const MATERIALES=MATERIALES_IA;
+  const tipo=canonCat(prefill.tipo)||prefill.tipo||'';
+  const grupoT=grupoDeCat(tipo)||grupoDe(tipo);
+  const camposT=camposPrenda(tipo);
+  const FITS=CORTES[grupoT]||[];
+  const isBottom=grupoT==='Pantalones'||grupoT==='Shorts/Bermudas';
+  const isShoe=grupoT==='Calzado';
+  const isOuter=grupoT==='Chaquetas/Abrigos';
+  const isKnit=grupoT==='Jerséis/Sudaderas';
+  const isTop=grupoT==='Camisetas';
+  const isShirt=grupoT==='Camisas';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="ab">${svg('back',20)}</button><span class="t">¿Me lo compro?</span></div>
+    <div class="sub" style="margin:-6px 0 18px">Cuantos más datos, más preciso el análisis y la búsqueda de ofertas.</div>
+    <div class="row2">
+      <div class="field"><label>Marca</label><input id="ac_brand" value="${esc(prefill.brand||'')}" placeholder="Stone Island…"/></div>
+      <div class="field"><label>Precio €</label><input id="ac_price" inputmode="decimal" value="${esc(prefill.price||'')}" placeholder="160"/></div>
+    </div>
+    <div class="field"><label>Tipo de prenda</label><select id="ac_tipo">${catOptionsHTML(tipo)}</select></div>
+    <div class="row2">
+      <div class="field"><label>Color principal</label><select id="ac_color">${optSel(COLORES,prefill.color||'')}</select></div>
+      <div class="field"><label>Talla</label><select id="ac_talla">${optSel(isShoe?TALLAS_ZAPATO:isBottom?TALLAS_PANTALON:TALLAS_ROPA,prefill.talla||'')}</select></div>
+    </div>
+    ${camposT.fit?`<div class="field"><label>Corte / fit</label><select id="ac_fit">${optSel(FITS,canonCorte(prefill.fit,tipo))}</select></div>`:''}
+    ${(isTop||isShirt)?`<div class="field"><label>Manga</label><div class="chips" id="manga_chips">${['Manga corta','Manga larga','Sin mangas'].map(mv=>`<button class="chip${(prefill.manga||'Manga corta')===mv?' on':''}" data-manga="${mv}">${mv}</button>`).join('')}</div></div>`:''}
+    ${isKnit?`<div class="field"><label>Tipo de punto</label><div class="chips" id="knit_chips">${['Punto fino','Punto grueso','Trenzado','Liso','Cuello alto','Cuello redondo'].map(k=>`<button class="chip${(prefill.knit||'')===k?' on':''}" data-knit="${k}">${k}</button>`).join('')}</div></div>`:''}
+    ${isOuter?`<div class="field"><label>Características</label><div class="chips" id="outer_chips" style="flex-wrap:wrap">${['Capucha','Impermeable','Acolchado','Con forro','Sin forro','Cortavientos'].map(k=>`<button class="chip${(prefill.outer||[]).includes(k)?' on':''}" data-outer="${k}">${k}</button>`).join('')}</div></div>`:''}
+    <div class="field"><label>Material (opcional)</label><select id="ac_mat">${optSel(['','...'].concat(MATERIALES),prefill.material||'')}</select></div>
+    <div class="field"><label>Notas adicionales (opcional)</label><input id="ac_notes" value="${esc(prefill.notes||'')}" placeholder="Edición limitada, colaboración…"/></div>
+    <button class="btn dark" id="ac_go" style="margin-top:4px">${svg('spark',18)} Analizar y buscar ofertas</button>
+    <div id="ac_out" style="margin-top:16px"></div>
+  </div>`;
+  el.querySelector('#ab').onclick=()=>el.remove();
+  const chipsToggle=(attr,single=true)=>{
+    const chips=el.querySelectorAll(`[data-${attr}]`);
+    chips.forEach(b=>b.onclick=()=>{ if(single){chips.forEach(x=>x.classList.remove('on'));b.classList.add('on');}else{b.classList.toggle('on');} });
+  };
+  if(el.querySelector('[data-manga]'))chipsToggle('manga',true);
+  if(el.querySelector('[data-knit]'))chipsToggle('knit',true);
+  if(el.querySelector('[data-outer]'))chipsToggle('outer',false);
+  el.querySelector('#ac_tipo').onchange=()=>{ const data=readAsesorForm(el); renderAsesorForm(el,data); };
+  el.querySelector('#ac_go').onclick=async function(){
+    const data=readAsesorForm(el); if(!data.tipo&&!data.brand)return;
+    const out=el.querySelector('#ac_out');
+    this.disabled=true; this.innerHTML=`${svg('load',18)} Analizando…`; this.querySelector('svg').classList.add('spin');
+    const desc=buildDesc(data); const searchQ=buildSearchQuery(data);
+    const u=userContext();
+    const sys=`Eres un asesor de compra honesto especializado en moda. Tienes en cuenta el perfil real del usuario para acertar (sexo, presupuesto, marcas que ya usa, colores y corte que prefiere). REGLA DURA: nunca sugieras marcas de segmento inferior al suyo (Shein/Temu/AliExpress prohibidas siempre; Primark/Lefties/Kiabi prohibidas si gasta +35€/prenda). Todo para su sexo y edad, nunca de mujer si es hombre ni de niños. Devuelve SOLO JSON: {"veredicto":"comprar"|"dudoso"|"evitar","encaje":0-100,"razon":"2-3 frases específicas mencionando prendas concretas de su armario y su estilo","ya_tienes":"descripción de prenda parecida o vacío","looks_nuevos":número,"coste_por_uso_estimado":número}.`;
+    const usr=`${userContextPrompt()}\n\nArmario actual: ${wardrobeSummary()}.\nQuiere comprar: ${desc}${data.price?` por ${data.price}€`:''}.`;
+    const [r,offers]=await Promise.all([
+      callAI(sys,usr),
+      searchOffersExtensive({query:searchQ,brand:data.brand,productType:[data.tipo,data.color,data.material].filter(Boolean).join(' '),maxPrice:data.price,ownedBrands:u.topBrands,sex:u.sex,avgPrice:u.avgPrice})
+    ]);
+    let html='';
+    if(r){
+      const vc={comprar:'var(--eco)',dudoso:'var(--amber)',evitar:'var(--danger)'}[r.veredicto]||'var(--ink)';
+      const vt={comprar:'✓ Te conviene',dudoso:'⚠ Piénsalo',evitar:'✗ No lo compres'}[r.veredicto]||'';
+      html+=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F2F3F5")}</div><div class="nm">Veredicto<span>Basado en tu armario real</span></div><span class="pill" style="margin-left:auto;color:${vc};border-color:${vc};font-size:11px">${vt} · ${r.encaje||0}%</span></div><div class="say" style="margin-top:10px">${r.razon||''}</div>${r.ya_tienes?`<div class="sub" style="margin-top:8px;color:var(--amber)">⚠ Ya tienes algo parecido: ${r.ya_tienes}</div>`:''}<div style="display:flex;gap:16px;margin-top:10px">${r.looks_nuevos!=null?`<div><div style="font-size:18px;font-weight:800">${r.looks_nuevos}</div><div style="font-size:11px;color:var(--ink3)">looks nuevos</div></div>`:''}${r.coste_por_uso_estimado?`<div><div style="font-size:18px;font-weight:800">${r.coste_por_uso_estimado}€</div><div style="font-size:11px;color:var(--ink3)">coste/uso est.</div></div>`:''}</div></div>`;
+    }
+    if(offers===null){
+      html+=`<div class="note" style="margin-top:12px">${svg('tag',18)}<span>Añade <b>SERPAPI_KEY</b> en Vercel para ver precios reales de tiendas.</span></div>`;
+    } else {
+      if(offers.exact&&offers.exact.length){
+        html+=`<div class="shead"><h2>${data.brand||'Esta prenda'} · mejor precio</h2></div>`+
+          offers.exact.slice(0,4).map((o,i)=>`<a class="offer${i===0?' best':''}" ${attrsOferta(o)}><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${esc(o.title)}</div><div class="offer-s">${esc(o.source)}${i===0?' · más barato':''}</div></div><div class="offer-p">${esc(o.price||'')}</div></a>`).join('');
+      }
+      if(offers.alternatives&&offers.alternatives.length){
+        html+=`<div class="shead"><h2>Alternativas para ti</h2></div><div class="sub" style="margin:-4px 0 10px">Parecidas y más baratas, priorizando marcas que ya usas.</div>`+
+          offers.alternatives.slice(0,4).map(o=>`<a class="offer" ${attrsOferta(o)}><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${esc(o.title)}</div><div class="offer-s">${esc(o.source)}</div></div><div class="offer-p">${esc(o.price||'')}</div></a>`).join('');
+      }
+    }
+    out.innerHTML=html;
+    if(offers!==null)appendUsedSection(out,{query:searchQ,brand:data.brand,productType:[data.tipo,data.color,data.material].filter(Boolean).join(' '),maxPrice:data.price,ownedBrands:u.topBrands,sex:u.sex,avgPrice:u.avgPrice});
+    // Wishlist: guardar como "vigilada" (intención de compra con precio objetivo)
+    const wid='w'+Date.now();
+    const wbar=document.createElement('button');
+    wbar.className='btn ghost'; wbar.style.marginTop='12px';
+    wbar.innerHTML=`${svg('heart',17)} Vigilar precio de esta prenda`;
+    wbar.onclick=function(){
+      const bestNow=(offers&&offers.exact&&offers.exact[0])||null;
+      saveWishlistItem({id:wid,desc,brand:data.brand||'',tipo:data.tipo||'',query:searchQ,
+        targetPrice:parseFloat(data.price)||null,
+        lastPrice:bestNow&&bestNow.price_value?bestNow.price_value:(parseFloat(data.price)||null),
+        lastLink:bestNow?bestNow.link:null,lastSource:bestNow?bestNow.source:null,
+        thumbnail:bestNow?bestNow.thumbnail:null});
+      this.disabled=true; this.innerHTML=`${svg('check',17)} En tu wishlist`;
+      haptic();
+    };
+    out.appendChild(wbar);
+    this.disabled=false; this.innerHTML=`${svg('spark',18)} Analizar otra`;
+  };
+}
+function readAsesorForm(el){
+  const q=id=>{ const e=el.querySelector('#'+id); return e?e.value.trim():''; };
+  const chip=attr=>{ const e=el.querySelector(`[data-${attr}].on`); return e?e.dataset[attr]:''; };
+  const chips=attr=>[...el.querySelectorAll(`[data-${attr}].on`)].map(e=>e.dataset[attr]);
+  return {brand:q('ac_brand'),price:parseFloat(q('ac_price'))||null,tipo:q('ac_tipo'),color:q('ac_color'),talla:q('ac_talla'),fit:q('ac_fit')||'',material:q('ac_mat')||'',manga:chip('manga'),knit:chip('knit'),outer:chips('outer'),notes:q('ac_notes')};
+}
+function buildDesc(d){ return [d.brand,d.tipo,d.manga,d.knit,d.outer?.join(', '),d.fit,d.color,d.material,d.talla?'talla '+d.talla:'',d.notes].filter(Boolean).join(' ')||'prenda sin especificar'; }
+function buildSearchQuery(d){ return [d.brand,d.tipo?.toLowerCase(),d.color&&d.color!=='Multicolor'?d.color.toLowerCase():'',d.material&&d.material!=='...'?d.material.toLowerCase():'',d.talla].filter(Boolean).join(' ')||d.tipo||'ropa'; }
+
+/* ═══ PARA TI: recomendaciones personalizadas REALES ═══
+   Productos de verdad (Google Shopping) según las marcas del usuario,
+   su categoría más usada, su sexo y su rango de gasto. Sin patrocinios. */
+/* ═══ SALIR A ENTRENAR: kit según el tiempo REAL y TU armario deportivo ═══ */
+async function openSalida(){
+  const sportGs=store.garments.filter(g=>g.context==='deporte'&&g.status!=='venta');
+  if(!sportGs.length){ toast('Añade prendas deportivas para usar el asesor de salida'); return; }
+  const sports=[...new Set(sportGs.map(g=>g.sport).filter(Boolean))];
+  const el=document.createElement('div'); el.className='ficha'; el.id='salida';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="slb">${svg('back',20)}</button><span class="t">Salir a entrenar</span></div>
+    <div class="eyebrow">${WEATHER.city}${WEATHER.temp!=null?` · ${WEATHER.temp}° · ${WEATHER.label||''}`:''}</div>
+    <div class="title" style="font-size:30px">¿Qué toca hoy?</div>
+    <div class="chips" style="margin:16px 0">${(sports.length?sports:SPORTS).map(x=>`<button class="chip" data-sp="${x}">${x}</button>`).join('')}</div>
+    <div id="sl_out"></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#slb').onclick=()=>el.remove();
+  el.querySelectorAll('[data-sp]').forEach(b=>b.onclick=async()=>{
+    el.querySelectorAll('[data-sp]').forEach(x=>x.classList.toggle('on',x===b));
+    const sp=b.dataset.sp;
+    const out=el.querySelector('#sl_out');
+    out.innerHTML=`<div class="skel" style="height:110px;border-radius:16px"></div>`;
+    const pool=sportGs.filter(g=>!g.sport||g.sport===sp);
+    const listado=pool.map(g=>`${g.id}: ${g.brand} ${g.name} (${g.cat}${g.km!=null?`, ${Math.round(g.km)}km`:''})`).join('\n');
+    const wx=WEATHER.temp!=null?`${WEATHER.temp}°C, ${WEATHER.label||''}`:'tiempo desconocido';
+    const sys=`Eres el asesor deportivo de Drobe. Eliges el kit para entrenar SOLO de las prendas listadas (por id). Devuelve SOLO JSON: {"consejo":"1-2 frases sobre cómo vestirse hoy para ${sp} con este tiempo","ids":["id1","id2"],"aviso":"si alguna zapatilla supera 600km, menciónalo, si no vacío"}. Máximo 4 ids. Si falta algo esencial para este tiempo, dilo en el consejo sin inventar prendas.`;
+    let r=await callAI(sys,`Tiempo en ${WEATHER.city}: ${wx}.\nDeporte: ${sp}.\nPrendas disponibles:\n${listado}`);
+    if(!r) r=await callAI(sys,`Tiempo: ${wx}. Deporte: ${sp}. Prendas:\n${listado}`);
+    if(!el.isConnected)return;
+    if(!r){ out.innerHTML=`<div class="note warn">${svg('spark',16)}<span>No pude generar el kit ahora mismo. Prueba de nuevo.</span></div>`; return; }
+    const picks=(r.ids||[]).map(id=>pool.find(g=>g.id===id)).filter(Boolean);
+    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F2F3F5")}</div><div class="nm">Kit de hoy<span>${sp} · ${wx}</span></div></div>
+      <div class="say">${esc(r.consejo||'')}</div>
+      ${r.aviso?`<div class="sub" style="margin-top:8px;color:var(--accent-lite)">${esc(r.aviso)}</div>`:''}
+      ${picks.length?`<div class="outfit">${picks.map(g=>`<div class="it" data-o="${g.id}"><div class="ph"><img loading="lazy" src="${g.img||''}"/></div><div class="l">${esc(g.brand)} ${esc(g.name)}</div></div>`).join('')}</div>`:''}
+    </div>`;
+    bindOutfit(out);
+  });
+}
+
+async function openParaTi(){
+  if(!store.profile?.consent_marketing){ toast('Activa las recomendaciones en Perfil'); return; }
+  const u=userContext();
+  if(!u.topBrands.length){ toast('Añade prendas con marca para poder recomendarte'); return; }
+  const el=document.createElement('div'); el.className='ficha'; el.id='parati';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="ptb">${svg('back',20)}</button><span class="t">Seleccionado para ti</span></div>
+    <div class="sub" style="margin-bottom:14px">Según tus marcas (${u.topBrands.slice(0,3).map(esc).join(', ')}), tu estilo y lo que sueles gastar.</div>
+    <div class="pt-grid" id="ptgrid">${Array(6).fill('<div><div class="skel" style="aspect-ratio:3/4"></div><div class="skel" style="height:11px;margin-top:8px"></div></div>').join('')}</div>
+    <div class="b2b-foot" style="color:var(--ink3)">${svg('lock',13)} Productos reales de Google Shopping. Nadie paga por aparecer aquí.</div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#ptb').onclick=()=>el.remove();
+
+  // categoría más usada del armario → palabra de búsqueda
+  const catCount={}; store.garments.forEach(g=>{const k=g.catGroup||g.cat||'';if(k)catCount[k]=(catCount[k]||0)+1;});
+  const topGroups=Object.entries(catCount).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  const W={'Camisas':'camisa','Camisetas':'camiseta','Pantalones':'pantalón','Jerséis/Sudaderas':'jersey','Abrigos/Chaquetas':'chaqueta','Abrigos':'abrigo','Calzado':'zapatillas','Vestidos':'vestido','Faldas':'falda'};
+  const words=topGroups.map(g=>W[g]||String(g).split('/')[0].toLowerCase()).filter(Boolean);
+  const w1=words[0]||'camisa', w2=words[1]||w1;
+  const maxP=u.avgPrice?Math.round(u.avgPrice*1.8):null;
+  // marcas equivalentes por ESTILO (no solo el logo que ya tiene)
+  const adj=await ensureAdjacentBrands();
+  const queries=[
+    {query:`${u.topBrands[0]} ${w1}`,brand:u.topBrands[0],productType:w1},
+    u.topBrands[1]?{query:`${u.topBrands[1]} ${w2}`,brand:u.topBrands[1],productType:w2}:null,
+    adj[0]?{query:`${adj[0]} ${w1}`,brand:adj[0],productType:w1}:null,
+    adj[1]?{query:`${adj[1]} ${w2}`,brand:adj[1],productType:w2}:null,
+    {query:`${w1}`,productType:w1}, // descubrimiento multi-marca, el motor filtra
+  ].filter(Boolean);
+
+  const results=await Promise.all(queries.map(q=>searchOffersExtensive({...q,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP,avgPrice:u.avgPrice,channel:'new'})));
+  const seen=new Set(); const items=[];
+  results.forEach(r=>{ if(r)[...(r.exact||[]),...(r.alternatives||[])].forEach(o=>{ const k=(o.title||'')+(o.price||''); if(o.title&&!seen.has(k)){seen.add(k);items.push(o);} }); });
+
+  const grid=el.querySelector('#ptgrid'); if(!grid)return;
+  // CURACIÓN de estilista: puntuar todo, quedarnos solo con lo excelente, diversificar
+  const curated=curateOffers(items,{threshold:80});
+  if(!curated.length){
+    grid.outerHTML=`<div class="pt-empty">${results.every(r=>r===null)
+      ?'Activa SERPAPI_KEY en Vercel para ver productos reales.'
+      :`<div class="pt-empty-t">Hoy no hay nada a tu altura.</div><div>${esc(explainNoOffers(items))}</div>`}</div>`;
+    return;
+  }
+  grid.innerHTML=curated.slice(0,8).map(o=>`
+    <a class="pt-card" href="${esc(o.link)}" target="_blank" rel="noopener">
+      <div class="pt-ph">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}"/>`:svg('tag',22)}</div>
+      <div class="pt-n">${esc(o.title)}</div>
+      <div class="pt-m"><b>${esc(o.price||'')}</b> · ${esc(o.source||'')}</div>
+    </a>`).join('');
+}
+
+async function openHuecos(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='huecos';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="hb">${svg('back',20)}</button><span class="t">¿Qué me falta?</span></div>
+    <div class="sub" style="margin:-6px 0 16px">La IA analiza tu armario y tu estilo para decirte qué tipo de prenda te cundiría más.</div>
+    <div id="h_cfg">
+      <div class="shead"><h2>¿Para qué contexto?</h2></div>
+      <div class="ctx-ask-btns" style="margin-bottom:16px">
+        <button class="ctx-btn on" data-hctx="calle">${svg('hanger',17)} Calle</button>
+        <button class="ctx-btn" data-hctx="deporte">${svg('spark',17)} Deporte</button>
+      </div>
+      <div class="field"><label>Marcas que te gustan (opcional)</label>
+        <input id="h_brands" placeholder="Aparte de las tuyas: COS, Arket…" value="${esc((store.profile?.likedBrands||[]).join(', '))}"/></div>
+      <div class="sub" style="margin:-4px 0 14px;font-size:12px">Drobe las recordará para conocerte mejor.</div>
+      <button class="btn dark" id="h_go">${svg('spark',18)} Analizar mi armario</button>
+    </div>
+    <div id="h_out"></div></div>`;
+  document.body.appendChild(el);
+  el.querySelector('#hb').onclick=()=>el.remove();
+  let hctx='calle';
+  el.querySelectorAll('[data-hctx]').forEach(b=>b.onclick=()=>{ hctx=b.dataset.hctx; el.querySelectorAll('[data-hctx]').forEach(x=>x.classList.toggle('on',x===b)); haptic(); });
+  await new Promise(res=>{ el.querySelector('#h_go').onclick=()=>{
+    const raw=el.querySelector('#h_brands').value.trim();
+    const liked=raw?raw.split(/[,;]/).map(x=>x.trim()).filter(Boolean).slice(0,8):[];
+    store.profile=store.profile||{}; store.profile.likedBrands=liked; save(); // aprender: nutre el Fashion Profile
+    el.querySelector('#h_cfg').remove();
+    el.querySelector('#h_out').innerHTML=`<div class="empty">${svg('load',26)}<div style="margin-top:10px">Analizando tu armario…</div></div>`;
+    el.querySelector('.empty svg')?.classList.add('spin');
+    res();
+  };});
+  const liked=store.profile?.likedBrands||[];
+  const groups={};store.garments.filter(g=>(g.context||'calle')===hctx).forEach(g=>{const k=g.catGroup||catToGroup(g.cat||'');groups[k]=(groups[k]||0)+1;});
+  const u=userContext();
+  const brandList=u.topBrands.length?u.topBrands.join(', '):'(aún sin marcas claras)';
+  const sys=`Eres el asesor de armario de Drobe. Tu trabajo es decir qué TIPO de prenda le falta al usuario, SIEMPRE coherente con su perfil real.
+REGLAS ESTRICTAS:
+- Las recomendaciones deben encajar con su sexo (${u.sex||'no indicado'}), su gama de precio (${u.segment||'media'}, ~${u.avgPrice||0}€/prenda) y su estilo (corte ${u.topFit||'?'}, colores ${u.topColors.join('/')||'?'}).
+- Para el campo "busqueda": prioriza marcas que el usuario YA usa (${brandList}). Si recomiendas una marca nueva, debe ser del MISMO segmento de precio y estilo, nunca fast-fashion barata si el usuario es premium, ni lujo si es budget.
+- Nunca propongas prendas estridentes o fuera de su paleta y registro.
+- Su relación con los estampados: ${(()=>{const P=fashionProfile();return P.plainRatio>0.7?'viste LISO. Prohibido sugerir estampados grandes, gráficos, dibujos, anime, calaveras o frases.':'mixta, pero nada estridente.';})()}
+- VETO ABSOLUTO: nunca recomiendes Shein, Temu, AliExpress ni Wish. Si su ticket medio supera 35€, tampoco Primark, Lefties ni Kiabi — quien viste sus marcas no compra ahí.
+- CONTEXTO PEDIDO: ${hctx==='deporte'?'DEPORTE — solo prendas técnicas/deportivas (running, ciclismo, gym…), marcas deportivas de su nivel':'CALLE — solo ropa de vestir, nada técnico'}.
+${liked.length?`- Marcas que el usuario ha dicho que LE GUSTAN (prioridad alta junto a las suyas): ${liked.join(', ')}.`:''}
+- El usuario es ${u.sex||'adulto'}${u.age?` de ${u.age} años`:''}: TODO debe ser para su sexo y edad. Jamás ropa de mujer si es hombre (ni viceversa), jamás de niños o bebés.
+Devuelve SOLO JSON: {"resumen":"1 frase sobre su armario y su estilo","faltas":[{"prenda":"tipo concreto","motivo":"por qué le cundiría dado SU estilo","busqueda":"marca(preferiblemente suya) + tipo + color + ${u.sex||''}"}]}. Máximo 4 faltas.`;
+  const usr=`${userContextPrompt()}\n\nArmario por categorías: ${JSON.stringify(groups)}. Prendas: ${wardrobeSummary()}.`;
+  callAI(sys,usr).then(async r=>{
+    const out=el.querySelector('#h_out');
+    if(!r||!r.faltas){out.innerHTML=`<div class="note warn">${svg('spark',18)}<span>No pude analizar (revisa GROQ_API_KEY).</span></div>`;return;}
+    out.innerHTML=`<div class="advisor"><div class="who"><div class="av">${dmark(15,"#F2F3F5")}</div><div class="nm">Tu armario<span>Análisis de huecos</span></div></div><div class="say">${r.resumen||''}</div></div>`+
+      `<div class="shead"><h2>Lo que te cundiría</h2></div>`+
+      r.faltas.map(f=>`<div class="gap" data-q="${esc(f.busqueda||f.prenda)}" data-type="${esc(f.prenda)}">
+        <div class="gap-main"><div class="gap-t">${f.prenda}</div><div class="gap-m">${f.motivo}</div></div>
+        <button class="gap-btn">${svg('tag',16)} Buscar</button></div>`).join('');
+    out.querySelectorAll('.gap').forEach(g=>g.querySelector('.gap-btn').onclick=async function(){
+      const q=g.dataset.q, ptype=g.dataset.type;
+      this.disabled=true; this.innerHTML=`${svg('load',16)} …`; this.querySelector('svg').classList.add('spin');
+      let box=g.querySelector('.gap-offers'); if(!box){box=document.createElement('div');box.className='gap-offers';g.after(box);}
+      box.innerHTML=`<div class="sub" style="margin:8px 0 4px">Buscando según tu estilo…</div>`+
+        Array(3).fill(`<div class="skel-offer"><div class="skel"></div><div class="skel-lines"><div class="skel"></div><div class="skel"></div></div></div>`).join('');
+      const maxP=u.avgPrice?Math.round(u.avgPrice*1.6):null;
+      // dos canales en paralelo: tiendas nuevas y segunda mano, ambos con el perfil
+      const [nuevo,used]=await Promise.all([
+        searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP,channel:'new',avgPrice:u.avgPrice}),
+        searchOffersExtensive({query:q,productType:ptype,ownedBrands:u.topBrands,sex:u.sex,maxPrice:maxP,channel:'used',avgPrice:u.avgPrice})
+      ]);
+      if(nuevo===null&&used===null){box.innerHTML=`<div class="note" style="margin:8px 0">${svg('tag',16)}<span>Activa SERPAPI_KEY para ver ofertas reales.</span></div>`;this.disabled=false;this.innerHTML=`${svg('tag',16)} Buscar`;return;}
+      const offerRow=o=>`<a class="offer" ${attrsOferta(o)}><div class="offer-img">${o.thumbnail?`<img loading="lazy" decoding="async" src="${esc(o.thumbnail)}"/>`:svg('tag',20)}</div><div class="offer-info"><div class="offer-t">${esc(o.title)}</div><div class="offer-s">${esc(o.source)}</div></div><div class="offer-p">${esc(o.price||'')}</div></a>`;
+      const nItems=curateOffers(nuevo?[...(nuevo.exact||[]),...(nuevo.alternatives||[])]:[],{threshold:80,brandHints:liked});
+      const uItems=curateOffers(used?[...(used.exact||[]),...(used.alternatives||[])]:[],{threshold:70});
+      let html='';
+      html+=`<div class="chan-head">${svg('tag',15)} Nuevo en tiendas</div>`;
+      html+= nItems.length?nItems.slice(0,4).map(offerRow).join(''):`<div class="chan-empty">Sin resultados nuevos para tu perfil.</div>`;
+      html+=`<div class="chan-head" style="margin-top:14px">${svg('sync',15)} Segunda mano</div>`;
+      html+= uItems.length?uItems.slice(0,4).map(offerRow).join(''):`<div class="chan-empty">Sin resultados de segunda mano ahora mismo.</div>`;
+      box.innerHTML=html;
+      this.disabled=false; this.innerHTML=`${svg('tag',16)} Buscar`;
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════
+   INSIGHTS (B2B enriched)
+═══════════════════════════════════════════ */
+function vInsights(m){
+  const dna=computeStyleDNA();
+  const total=dna.totalValue||0;
+  const dead=store.garments.filter(g=>g.worn<=3);
+  const cm=MUESTRA_COLOR;
+  const rk=store.garments.slice().sort((a,b)=>cpw(b)-cpw(a));
+  m.innerHTML=`<div class="reveal"><div class="eyebrow">Insights</div>
+    <div class="title">Tu armario,<br>en datos</div></div>
+
+    <!-- Stats principales -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0" class="reveal" style="animation-delay:.02s">
+      <div class="stat"><div class="n">${Math.round(total)} €</div><div class="l">Valor total</div></div>
+      <div class="stat"><div class="n">${dead.length}</div><div class="l">Dormidas</div></div>
+      <div class="stat"><div class="n">${dna.avgPrice||0} €</div><div class="l">Precio medio</div></div>
+    </div>
+
+    <!-- ADN de estilo -->
+    <div class="shead"><h2>Tu ADN de estilo</h2></div>
+    <div class="dna-card reveal" style="animation-delay:.06s">
+      <div class="dna-row">
+        <span class="dna-k">Segmento</span>
+        <span class="dna-v seg-${dna.segment||'mid'}">${{premium:'Premium',mid:'Mid-range',budget:'Budget'}[dna.segment||'mid']||'—'}</span>
+      </div>
+      <div class="dna-row">
+        <span class="dna-k">Corte preferido</span>
+        <span class="dna-v">${dna.topFit||'—'}</span>
+      </div>
+      <div class="dna-row">
+        <span class="dna-k">Registro</span>
+        <span class="dna-v">${dna.topFormality||'—'}</span>
+      </div>
+      <div class="dna-row">
+        <span class="dna-k">Neutros</span>
+        <span class="dna-v">${dna.neutralPct||0}% del armario</span>
+      </div>
+      <div class="dna-row">
+        <span class="dna-k">Materiales</span>
+        <span class="dna-v">${(dna.topMaterials||[]).join(', ')||'—'}</span>
+      </div>
+      <div class="dna-row">
+        <span class="dna-k">Coste/uso medio</span>
+        <span class="dna-v">${dna.avgCpw||0} €</span>
+      </div>
+    </div>
+
+    <!-- Marcas top -->
+    <div class="shead"><h2>Tus marcas</h2></div>
+    <div class="reveal" style="animation-delay:.08s">
+      ${(dna.topBrands||[]).map(b=>`<div class="brand-bar">
+        <span class="bb-name">${b.brand}</span>
+        <div class="bb-track"><div class="bb-fill" style="width:${b.share}%"></div></div>
+        <span class="bb-pct">${b.share}%</span>
+      </div>`).join('')}
+    </div>
+
+    <!-- Paleta de color -->
+    <div class="shead"><h2>Paleta de color</h2></div>
+    <div class="reveal" style="animation-delay:.1s">
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        ${(dna.topColors||[]).map(c=>`<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+          <div style="width:40px;height:40px;border-radius:50%;background:${cm[canonColor(c.color)]||cm[c.color]||'#C6CAD1'};border:1px solid rgba(17,20,28,.10)"></div>
+          <div style="font-size:10px;color:var(--ink3)">${c.color}</div>
+          <div style="font-size:10px;font-weight:700">${c.share}%</div>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Tallas por marca -->
+    <div class="shead"><h2>Tus tallas</h2></div>
+    <div class="reveal" style="animation-delay:.12s">
+      ${Object.entries(dna.sizeByBrand||{}).map(([b,s])=>`<div class="sizerow"><span class="bn">${b}</span><span class="sz">${s}</span></div>`).join('')||'<div class="sub">Añade tallas a tus prendas para que Drobe aprenda.</div>'}
+    </div>
+
+    <!-- Coste por uso -->
+    <div class="shead"><h2>Coste por uso</h2></div>
+    <div class="reveal" style="animation-delay:.14s">
+      ${rk.map(g=>`<div class="cpw"><div class="ph"><img loading="lazy" decoding="async" src="${g.img||''}"/></div>
+        <div><div class="nm">${g.brand} · ${g.name}</div><div class="mt">${g.worn} usos</div></div>
+        <div class="val"><div class="v" style="color:${cpw(g)>15?'var(--amber)':'var(--eco)'}">${cpw(g).toFixed(2)} €</div><div class="s">por uso</div></div></div>`).join('')}
+    </div>`;
+
+  // actualizar DNA en el perfil (drobe_score se calcula y guarda para uso interno/B2B, sin mostrarse como métrica)
+  store.profile=store.profile||{};
+  store.profile.style_dna=dna;
+  store.profile.drobe_score=computeDrobeScore();
+  save();
+  if(session){
+    if(store.profile.consent_data_b2b){
+      cloud.updateProfile({style_dna:dna,drobe_score:store.profile.drobe_score,segment:dna.segment,avg_price_per_item:dna.avgPrice,total_wardrobe_value:total,brand_sizes:dna.sizeByBrand,garment_count:dna.garmentCount}).catch(e=>logError('updateProfile', e));
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════
+   PERFIL
+═══════════════════════════════════════════ */
+function vPerfil(m){
+  const p=store.profile||{};
+  const name=p.name||(session?.user?.email?.split('@')[0])||'Usuario';
+  const dna=p.style_dna||computeStyleDNA();
+  m.innerHTML=`<div class="reveal">
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0 22px">
+      <div class="pav" id="pav" style="position:relative;cursor:pointer">
+        ${p.avatarUrl?`<img src="${esc(p.avatarUrl)}" class="pav-img"/>`:`<span class="pav-ini">${(name[0]||'U').toUpperCase()}</span>`}
+        <span class="pav-edit">${svg('pen',11)}</span>
+      </div>
+      <div>
+        <div style="font-family:var(--serif);font-size:21px;font-weight:500;font-style:italic;letter-spacing:-.01em">${name}</div>
+        <div class="sub" style="margin-top:2px">${store.garments.length} prendas · ${session?'☁ Sincronizado':'Local'}</div>
+      </div>
+    </div></div>
+
+    <button class="opt" id="p_tickets" style="margin-bottom:12px">
+      <span class="ring">${svg('receipt',22)}</span>
+      <div><div class="t1">Tickets y garantías</div><div class="t2">${(store.tickets||[]).length} ticket(s) · plazos de cambio</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+    ${(store.maletas||[]).length?`<button class="opt" id="p_maletas" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('pack',22)}</span>
+      <div><div class="t1">Mis maletas</div><div class="t2">${store.maletas.length} guardada(s)</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>`:''}
+
+    <button class="opt" id="p_tour" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('spark',22)}</span>
+      <div><div class="t1">Ver tutorial</div><div class="t2">Un repaso rápido de cómo funciona Drobe</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
+    <button class="opt" id="p_b2b" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--noir);color:var(--accent-lite)">${svg('chart',22)}</span>
+      <div><div class="t1">Drobe for Brands</div><div class="t2">Demo de la vista para marcas · datos reales agregados</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
+    <button class="opt" id="p_diag" style="margin-bottom:12px">
+      <span class="ring">${svg('shield',22)}</span>
+      <div><div class="t1">Diagnóstico</div><div class="t2">${(()=>{const n=errorLog().length;return n?`${n} incidencia(s) registrada(s)`:'Sin incidencias registradas';})()}</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+    <div id="strava_slot"></div>
+
+    <button class="opt" id="p_wish" style="margin-bottom:12px">
+      <span class="ring" style="background:var(--accent-soft);color:var(--accent)">${svg('heart',22)}</span>
+      <div><div class="t1">Wishlist</div><div class="t2">${(store.wishlist||[]).length} prenda(s) vigiladas</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>
+
+    <!-- Consentimiento B2B — CRÍTICO para el negocio -->
+    <div class="consent-card reveal" style="animation-delay:.04s">
+      <div class="cc-head">${svg('dna',18)} Datos y privacidad</div>
+      <div class="cc-body">
+        <label class="toggle-row">
+          <div>
+            <div class="tr-title">Mejorar Drobe con mis datos</div>
+            <div class="tr-sub">Envía eventos de uso anónimos (escaneos, compras) que afinan las recomendaciones. Si lo apagas, no se envía ninguno.</div>
+          </div>
+          <input type="checkbox" id="c_analytics" class="toggle" ${p.consent_analytics?'checked':''}/>
+        </label>
+        <label class="toggle-row">
+          <div>
+            <div class="tr-title">Compartir datos anónimos con marcas</div>
+            <div class="tr-sub">Nunca con tu nombre: solo agregados (segmento, valor, marcas). Si lo apagas, se retiran de la nube al momento.</div>
+          </div>
+          <input type="checkbox" id="c_b2b" class="toggle" ${p.consent_data_b2b?'checked':''}/>
+        </label>
+        <label class="toggle-row">
+          <div>
+            <div class="tr-title">Recibir recomendaciones personalizadas</div>
+            <div class="tr-sub">Añade sugerencias extra en el Estilista (segunda mano y ofertas según tu perfil). Nadie paga por aparecer.</div>
+          </div>
+          <input type="checkbox" id="c_marketing" class="toggle" ${p.consent_marketing?'checked':''}/>
+        </label>
+      </div>
+    </div>
+
+    <!-- Medidas -->
+    <div class="shead"><h2>Mis medidas</h2></div>
+    <div class="measure">
+      ${[['altura','Altura (cm)'],['peso','Peso (kg)'],['pecho','Pecho (cm)'],['cintura','Cintura (cm)'],['pie','Pie (EU)']].map(f=>`<div class="field" style="margin-bottom:0"><label>${f[1]}</label><input id="ms_${f[0]}" inputmode="numeric" value="${esc((p.measures||{})[f[0]]||'')}"/></div>`).join('')}
+    </div>
+
+    <div id="authslot"></div>
+
+    <!-- Ajustes -->
+    <div class="shead"><h2>Ajustes</h2></div>
+    ${[['cuenta','Cuenta y sincronización','user'],['notifs','Notificaciones','bell'],['privacidad','Privacidad y datos','lock'],['acerca','Acerca de Drobe','spark']].map((t,i)=>`<button class="opt reveal" data-sheet="${t[0]}" style="animation-delay:${0.1+i*0.04}s;padding:15px 18px;width:100%;text-align:left"><span class="ring" style="width:34px;height:34px;background:var(--surface)">${svg(t[2],18)}</span><div class="t1" style="font-size:15px">${t[1]}</div><span class="arr" style="margin-left:auto">${svg('chev',20)}</span></button>`).join('')}`;
+
+  renderAuth(m.querySelector('#authslot'));
+  m.querySelector('#p_tickets')?.addEventListener('click',()=>openTickets());
+  // avatar photo
+  const pavEl=m.querySelector('#pav');
+  if(pavEl){
+    const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.style.display='none';
+    pavEl.appendChild(inp);
+    pavEl.onclick=()=>inp.click();
+    inp.onchange=async(e)=>{
+      const file=e.target.files&&e.target.files[0]; if(!file)return;
+      try{
+        const img=await imageToBase64(file,400,0.88,true);
+        // crop cuadrado desde el centro del canvas
+        const c=document.createElement('canvas'); const sz=Math.min(img.w,img.h); c.width=200; c.height=200;
+        const src=new Image(); src.src=img.dataUrl;
+        await new Promise(r=>{src.onload=r;});
+        const ctx=c.getContext('2d');
+        ctx.beginPath(); ctx.arc(100,100,100,0,Math.PI*2); ctx.closePath(); ctx.clip();
+        const ox=(src.width-sz)/2, oy=(src.height-sz)/2;
+        ctx.drawImage(src,ox,oy,sz,sz,0,0,200,200);
+        const dataUrl=c.toDataURL('image/jpeg',0.88);
+        store.profile=store.profile||{}; store.profile.avatarUrl=dataUrl; save();
+        // subir a Storage si hay sesión
+        if(session){
+          const url=await cloud.uploadAvatar(dataUrl);
+          if(url){ store.profile.avatarUrl=url; save(); }
+        }
+        haptic(); render();
+      }catch(err){ toast('No se pudo procesar la imagen'); }
+    };
+  }
+  m.querySelector('#p_maletas')?.addEventListener('click',()=>openMaletasGuardadas());
+  m.querySelector('#p_tour')?.addEventListener('click',()=>{ try{localStorage.removeItem('drobe.tour');}catch(e){} startTour(); });
+  m.querySelector('#p_diag')?.addEventListener('click',()=>openDiagnostico());
+  m.querySelector('#p_b2b')?.addEventListener('click',()=>openB2BDemo());
+  m.querySelectorAll('[data-sheet]').forEach(b=>b.onclick=()=>openSettingsSheet(b.dataset.sheet));
+  stravaConfig().then(cfg=>{
+    const slot=m.querySelector('#strava_slot'); if(!slot||!cfg.configured)return;
+    const st=store.profile?.strava;
+    slot.innerHTML=`<button class="opt" id="p_strava" style="margin-bottom:12px">
+      <span class="ring" style="background:#FC4C02;color:#fff">${svg('sync',22)}</span>
+      <div><div class="t1">${st?'Strava conectado':'Conectar Strava'}</div><div class="t2">${st?'Sincroniza los km reales de tus zapatillas':'Km reales de zapatillas y bicis, automáticos'}</div></div>
+      <span class="arr">${svg('chev',20)}</span></button>`;
+    slot.querySelector('#p_strava').onclick=()=>st?stravaSyncGear():stravaConnect(cfg);
+  });
+  m.querySelector('#p_wish')?.addEventListener('click',()=>openWishlist());
+
+  // medidas
+  ['altura','peso','pecho','cintura','pie'].forEach(k=>{
+    const e=m.querySelector(`#ms_${k}`);
+    if(e)e.onchange=()=>{ store.profile=store.profile||{}; store.profile.measures=store.profile.measures||{}; store.profile.measures[k]=e.value; save(); if(session)cloud.updateProfile({measures:store.profile.measures}).catch(e=>logError('updateProfile', e)); };
+  });
+
+  // consentimientos — el activo B2B
+  const saveConsents=()=>{
+    store.profile=store.profile||{};
+    store.profile.consent_analytics=m.querySelector('#c_analytics')?.checked||false;
+    const wasB2b=store.profile.consent_data_b2b;
+    store.profile.consent_data_b2b=m.querySelector('#c_b2b')?.checked||false;
+    store.profile.consent_marketing=m.querySelector('#c_marketing')?.checked||false;
+    // revocación real: al apagar el toggle de marcas, los agregados se BORRAN de la nube
+    if(session&&wasB2b&&!store.profile.consent_data_b2b){
+      cloud.updateProfile({style_dna:null,drobe_score:null,segment:null,avg_price_per_item:null,total_wardrobe_value:null,brand_sizes:null,garment_count:null}).catch(e=>logError('updateProfile', e));
+      toast('Datos agregados retirados de la nube.');
+    }
+    store.profile.consent_at=new Date().toISOString();
+    save();
+    if(session) cloud.updateProfile({consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:store.profile.consent_analytics,consent_marketing:store.profile.consent_marketing,consent_at:store.profile.consent_at}).catch(e=>logError('updateProfile', e));
+  };
+  ['c_analytics','c_b2b','c_marketing'].forEach(id=>{ const e=m.querySelector('#'+id); if(e)e.onchange=saveConsents; });
+}
+
+function renderAuth(slot){
+  if(!slot)return;
+  if(!cloud.cloudEnabled()){
+    slot.innerHTML=`<div class="note" style="margin-top:14px">${svg('user',18)}<span>Supabase no configurado. Tus datos se guardan solo en este dispositivo.</span></div>`;
+    return;
+  }
+  if(session){
+    slot.innerHTML=`<div class="note" style="margin-top:14px;background:#EAF1EA;color:#2c6e4f">${svg('check',18)}<span>☁ Sincronizado · ${session.user?.email||''} · <button id="logout" style="text-decoration:underline;color:inherit;cursor:pointer">Cerrar sesión</button></span></div>
+      <button class="btn ghost" id="diag" style="margin-top:10px">${svg('spark',18)} Diagnóstico de guardado</button>
+      <div id="diagout"></div>`;
+    slot.querySelector('#logout').onclick=()=>cloud.signOut().then(()=>{
+      session=null;
+      // privacidad: al cerrar sesión no queda NADA de esta persona en el aparato
+      borrarRastroLocal();
+      store={garments:JSON.parse(JSON.stringify(SEED)),profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[],ownerId:null};
+      save(); render(); toast('Sesión cerrada');
+    }).catch(e=>{
+      // sin este catch, un cierre de sesión sin conexión no hacía nada en
+      // absoluto: ni mensaje, ni cambio de pantalla, y los datos seguían ahí
+      logError('signOut', e, {user:'No se pudo cerrar sesión. Comprueba tu conexión e inténtalo otra vez.'});
+    });
+    slot.querySelector('#diag').onclick=async function(){
+      this.disabled=true; this.innerHTML=`${svg('load',18)} Probando…`; this.querySelector('svg')?.classList.add('spin');
+      const d=await cloud.diagnose();
+      const box=slot.querySelector('#diagout');
+      box.innerHTML=`<div class="note ${d.ok?'':'warn'}" style="margin-top:10px;display:block"><b>${d.ok?'✓ El guardado funciona':'✗ Hay un problema'}</b><br>${d.steps.map(s=>'· '+esc(s)).join('<br>')}</div>`;
+      this.disabled=false; this.innerHTML=`${svg('spark',18)} Diagnóstico de guardado`;
+    };
+    return;
+  }
+  slot.innerHTML=`<div style="margin-top:14px">
+    <div class="field"><input id="em" type="email" placeholder="tu@email.com"/></div>
+    <div class="field"><input id="pw" type="password" placeholder="Contraseña"/></div>
+    <div id="amsg"></div>
+    <button class="btn dark" id="lg">Entrar / crear cuenta</button></div>`;
+  slot.querySelector('#lg').onclick=async function(){
+    const em=slot.querySelector('#em').value.trim(),pw=slot.querySelector('#pw').value;
+    if(!em||!pw){slot.querySelector('#amsg').innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">Introduce email y contraseña.</div>`;return;}
+    this.disabled=true; this.textContent='Conectando…';
+    try{
+      const s=await cloud.signInOrUp(em,pw);
+      if(s){session=s;await syncFromCloud();safeRender();}
+      else{slot.querySelector('#amsg').innerHTML=`<div class="note warn" style="margin:10px 0">${svg('spark',16)}<span><b>Confirma tu email para activar la nube.</b> Hasta entonces, lo que añadas se guarda solo en este dispositivo.</span></div>`;render();}
+    }catch(e){slot.querySelector('#amsg').innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">${e?.message||'No se pudo iniciar sesión.'}</div>`;render();}
+  };
+}
+
+/* ═══════════════════════════════════════════
+   ONBOARDING B2B-READY
+═══════════════════════════════════════════ */
+function needsWelcome(){ try{return !localStorage.getItem('drobe.seen')&&!session;}catch(e){return false;} }
+function markSeen(){ try{localStorage.setItem('drobe.seen','1');}catch(e){} }
+
+function renderWelcome(mode='intro'){
+  const el=document.createElement('div'); el.className='ficha'; el.id='welcome'; el.style.zIndex='200';
+  if(mode==='intro'){
+    el.innerHTML=`<div class="welcome">
+      <div class="welcome-top">
+        ${wordmark(46,'xl')}
+        <div class="welcome-tag">El sistema operativo de tu armario.</div>
+      </div>
+      <div class="welcome-feats">
+        ${[['cam','Digitaliza tu ropa con una foto'],['spark','Asesor de compra honesto — nunca inventa'],['store','Estás en tienda: talla, precio y duplicados al instante'],['tag','Convierte lo que no usas en dinero'],['plane','Maleta perfecta con el tiempo real del destino']].map(f=>`<div class="wfeat">${svg(f[0],20)}<span>${f[1]}</span></div>`).join('')}
+      </div>
+      <div class="welcome-actions">
+        <button class="btn dark" id="w_signup">Crear cuenta</button>
+        <button class="btn ghost" id="w_login">Ya tengo cuenta</button>
+        <button class="btn text" id="w_skip">Probar sin cuenta</button>
+      </div>
+    </div>`;
+    document.body.appendChild(el);
+    el.querySelector('#w_signup').onclick=()=>{el.remove();renderWelcome('signup');};
+    el.querySelector('#w_login').onclick=()=>{el.remove();renderWelcome('login');};
+    el.querySelector('#w_skip').onclick=()=>{markSeen();el.remove();maybeStartTour();};
+    return;
+  }
+  const isSignup=mode==='signup';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 30px)">
+    <div class="backbar"><button id="wb">${svg('back',20)}</button><span class="t">${isSignup?'Crear cuenta':'Iniciar sesión'}</span></div>
+    <div style="margin:10px 0 6px">${wordmark(28)}</div>
+    <div class="sub" style="margin-bottom:20px">${isSignup?'Tu armario, sincronizado en todos tus dispositivos.':'Entra para recuperar tu armario.'}</div>
+    ${!cloud.cloudEnabled()?`<div class="note warn">${svg('spark',18)}<span>Sincronización no disponible. Puedes usar la app en local.</span></div>`:''}
+    <div class="field" id="f_em"><label>Email</label><input id="w_em" type="email" inputmode="email" autocomplete="email" autocapitalize="off" placeholder="tu@email.com"/></div>
+    <div class="field" id="f_pw"><label>Contraseña</label><div class="pw-wrap"><input id="w_pw" type="password" autocomplete="${isSignup?'new-password':'current-password'}" placeholder="Mínimo 6 caracteres"/><button type="button" class="pw-eye" id="w_eye" aria-label="Mostrar contraseña">${svg('eye',18)}</button></div></div>
+    ${isSignup?`<div class="row2">
+      <div class="field"><label>Nombre (opcional)</label><input id="w_name" placeholder="Pepe"/></div>
+      <div class="field"><label>Edad (opcional)</label><input id="w_age" inputmode="numeric" placeholder="25"/></div>
+    </div>
+    <div class="field"><label>Sexo (opcional)</label>
+      <div class="chips" id="w_sex">${['Hombre','Mujer','Otro','Prefiero no decir'].map(s=>`<button class="chip" data-sex="${s}">${s}</button>`).join('')}</div></div>
+    <div class="consent-card" style="margin-top:14px">
+      <div class="cc-head">${svg('lock',16)} Privacidad</div>
+      <div class="cc-body">
+        <label class="toggle-row">
+          <div><div class="tr-title">Compartir datos anónimos con marcas</div><div class="tr-sub">Nunca con tu nombre. Ayuda a mejorar la moda y sube tu Drobe Score.</div></div>
+          <input type="checkbox" id="w_b2b" class="toggle" checked/>
+        </label>
+      </div>
+    </div>`:''}
+    <div id="w_msg"></div>
+    <button class="btn dark" id="w_go" style="margin-top:14px">${isSignup?'Crear cuenta':'Entrar'}</button>
+    <button class="btn text" id="w_skip2">Continuar sin cuenta</button>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#wb').onclick=()=>{el.remove();renderWelcome('intro');};
+  el.querySelector('#w_skip2').onclick=()=>{markSeen();el.remove();maybeStartTour();};
+  let sex='';
+  el.querySelectorAll('[data-sex]').forEach(b=>b.onclick=()=>{sex=b.dataset.sex;el.querySelectorAll('[data-sex]').forEach(x=>x.classList.toggle('on',x===b));});
+
+  // Validación en tiempo real + toggle de contraseña
+  const emEl=el.querySelector('#w_em'), pwEl=el.querySelector('#w_pw'), goBtn=el.querySelector('#w_go');
+  const emOk=v=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+  const setFieldErr=(fid,txt)=>{
+    const f=el.querySelector('#'+fid); if(!f)return;
+    f.classList.toggle('invalid',!!txt);
+    let e=f.querySelector('.ferr');
+    if(txt){ if(!e){e=document.createElement('div');e.className='ferr';f.appendChild(e);} e.textContent=txt; }
+    else if(e)e.remove();
+  };
+  const validate=()=>{
+    const okE=emOk(emEl.value.trim()), okP=pwEl.value.length>=6;
+    goBtn.disabled=!(okE&&okP);
+    goBtn.style.opacity=goBtn.disabled?'.55':'1';
+    return okE&&okP;
+  };
+  emEl.addEventListener('blur',()=>setFieldErr('f_em',emEl.value.trim()&&!emOk(emEl.value.trim())?'Este email no parece válido.':''));
+  emEl.addEventListener('input',()=>{ if(emOk(emEl.value.trim()))setFieldErr('f_em',''); validate(); });
+  pwEl.addEventListener('blur',()=>setFieldErr('f_pw',pwEl.value&&pwEl.value.length<6?'Mínimo 6 caracteres.':''));
+  pwEl.addEventListener('input',()=>{ if(pwEl.value.length>=6)setFieldErr('f_pw',''); validate(); });
+  pwEl.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!goBtn.disabled)goBtn.click(); });
+  const eye=el.querySelector('#w_eye');
+  if(eye)eye.onclick=()=>{ const show=pwEl.type==='password'; pwEl.type=show?'text':'password'; eye.style.color=show?'var(--accent)':'var(--ink3)'; };
+  validate();
+
+  el.querySelector('#w_go').onclick=async function(){
+    if(!validate())return;
+    const em=el.querySelector('#w_em').value.trim(),pw=el.querySelector('#w_pw').value;
+    const msg=el.querySelector('#w_msg');
+    if(!em||!pw){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">Introduce email y contraseña.</div>`;return;}
+    if(pw.length<6){msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">La contraseña debe tener al menos 6 caracteres.</div>`;return;}
+    if(!cloud.cloudEnabled()){markSeen();el.remove();maybeStartTour();return;}
+    this.disabled=true; this.textContent='Conectando…';
+    try{
+      const s=await cloud.signInOrUp(em,pw);
+      if(s){
+        session=s;
+        if(isSignup){
+          store.profile=store.profile||{};
+          store.profile.name=el.querySelector('#w_name')?.value||'';
+          store.profile.age=el.querySelector('#w_age')?.value||'';
+          store.profile.sex=sex;
+          store.profile.consent_data_b2b=el.querySelector('#w_b2b')?.checked||false;
+          store.profile.consent_analytics=true;
+          store.profile.consent_at=new Date().toISOString();
+          save();
+          cloud.updateProfile({name:store.profile.name,age:store.profile.age,sex:store.profile.sex,consent_data_b2b:store.profile.consent_data_b2b,consent_analytics:true,consent_at:store.profile.consent_at}).catch(e=>logError('updateProfile', e));
+        }
+        await syncFromCloud(); markSeen(); el.remove(); render(); maybeStartTour();
+      } else {
+        msg.innerHTML=`<div class="note warn" style="margin:10px 0">${svg('spark',16)}<span><b>Tu cuenta se creó pero aún no tienes sesión activa.</b> Confirma el email que te ha llegado y vuelve a entrar con tu contraseña. Mientras tanto, si sigues usando la app, tus prendas se guardarán <b>solo en este dispositivo</b> y se perderían si borras los datos del navegador.</span></div>`;
+        this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
+      }
+    }catch(e){
+      msg.innerHTML=`<div class="sub" style="color:var(--danger);margin-bottom:8px">${e?.message||'No se pudo conectar.'}</div>`;
+      this.disabled=false; this.textContent=isSignup?'Crear cuenta':'Entrar';
+    }
+  };
+}
+
+/* ═══════════════════════════════════════════
+   TOUR GUIADO — capa visual independiente.
+   No toca datos ni render(); solo lee el DOM ya pintado
+   y resalta elementos con explicaciones. Si un paso no
+   encuentra su elemento, lo salta sin romper nada.
+═══════════════════════════════════════════ */
+function tourSeen(){ try{return localStorage.getItem('drobe.tour')==='1';}catch(e){return true;} }
+function markTourSeen(){ try{localStorage.setItem('drobe.tour','1');}catch(e){} }
+
+const TOUR_STEPS=[
+  {sel:'.hero-look, .title', title:'Tu armario', body:'Aquí vive tu ropa. Cada mañana verás arriba una propuesta de look pensada para el tiempo de hoy y tu estilo.', navTo:'armario'},
+  {sel:'[data-t="add"]', title:'Añade prendas', body:'Este es el botón más importante. Haz una foto a una prenda o escanea el ticket de compra: Drobe la reconoce y la cataloga sola. Cuantas más subas, mejor te conocerá.', navTo:'armario'},
+  {sel:'#main', title:'Tu estilista', body:'Pregúntale qué ponerte, si comprar algo que has visto, o prepara la maleta de un viaje. Todo se adapta a lo que ya tienes y a tus gustos.', navTo:'estilista'},
+  {sel:'#main', title:'Tu ADN de estilo', body:'Aquí ves tu armario en datos: tus marcas, tus colores, el valor de tu ropa y qué prendas tienes dormidas. Se afina con cada prenda que añades.', navTo:'insights'},
+  {sel:'#main', title:'Perfil, tickets y ajustes', body:'Tus tickets con plazos de cambio y garantías, tus maletas guardadas, y tus datos. Cuanto más completo esté tu perfil, más acierta Drobe.', navTo:'perfil'},
+  {sel:null, title:'Listo', body:'Eso es todo. Empieza añadiendo 3 o 4 prendas y verás cómo Drobe empieza a conocerte.', navTo:'armario', final:true}
+];
+
+let tourIdx=0, tourActive=false;
+function maybeStartTour(){
+  if(tourSeen())return;
+  // asegurar que estamos en armario y que ha pintado
+  if(route!=='armario')go('armario');
+  setTimeout(()=>{ if(!tourSeen()) startTour(); }, 450);
+}
+function startTour(){
+  if(tourActive)return;
+  tourActive=true; tourIdx=0;
+  showTourStep();
+}
+function endTour(){
+  tourActive=false;
+  markTourSeen();
+  document.getElementById('tour-ov')?.remove();
+}
+function showTourStep(){
+  document.getElementById('tour-ov')?.remove();
+  if(tourIdx>=TOUR_STEPS.length){ endTour(); return; }
+  const step=TOUR_STEPS[tourIdx];
+
+  const proceed=()=>{
+    if(!tourActive) return; // por si se cerró mientras esperábamos
+    let target=null;
+    if(step.sel){ try{ target=document.querySelector(step.sel); }catch(e){ target=null; } }
+
+    const ov=document.createElement('div'); ov.id='tour-ov'; ov.className='tour-ov';
+    const card=document.createElement('div'); card.className='tour-card';
+
+    let focusTop=null, focusBottom=null;
+    if(target){
+      const r=target.getBoundingClientRect();
+      // si el elemento ocupa casi toda la pantalla (ej. #main entero), no dibujamos
+      // recuadro: quedaría gigante. Mostramos la explicación centrada.
+      const tooBig = r.height > window.innerHeight*0.6;
+      if(!tooBig && r.width>0 && r.height>0){
+        const pad=8;
+        const hole=document.createElement('div'); hole.className='tour-hole';
+        hole.style.left=Math.max(6,r.left-pad)+'px';
+        hole.style.top=Math.max(6,r.top-pad)+'px';
+        hole.style.width=Math.min(window.innerWidth-12,r.width+pad*2)+'px';
+        hole.style.height=(r.height+pad*2)+'px';
+        ov.appendChild(hole);
+        focusTop=r.top; focusBottom=r.bottom;
+      }
+    }
+
+    ov.appendChild(card);
+    const dots=TOUR_STEPS.map((_,i)=>`<i class="${i===tourIdx?'on':''}"></i>`).join('');
+    card.innerHTML=`
+      <div class="tour-step">Paso ${tourIdx+1} de ${TOUR_STEPS.length}</div>
+      <div class="tour-title">${step.title}</div>
+      <div class="tour-body">${step.body}</div>
+      <div class="tour-actions">
+        <div class="tour-dots">${dots}</div>
+        <div class="tour-btns">
+          ${step.final?'':`<button class="tour-skip" id="tour-skip">Saltar</button>`}
+          <button class="tour-next" id="tour-next">${step.final?'Empezar':'Siguiente'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+
+    // colocar la tarjeta sin tapar el elemento resaltado
+    if(focusTop!=null){
+      const cardH=card.offsetHeight;
+      if(focusTop < window.innerHeight*0.5){
+        card.style.top=Math.min(window.innerHeight-cardH-16, focusBottom+18)+'px';
+      } else {
+        card.style.top=Math.max(16, focusTop-cardH-18)+'px';
+      }
+    } else {
+      card.style.top=Math.max(16,(window.innerHeight/2-card.offsetHeight/2))+'px';
+    }
+
+    card.querySelector('#tour-next').onclick=()=>{ tourIdx++; showTourStep(); };
+    card.querySelector('#tour-skip')?.addEventListener('click',endTour);
+  };
+
+  if(step.navTo && route!==step.navTo){
+    go(step.navTo);
+    setTimeout(proceed,360);
+  } else {
+    setTimeout(proceed,80);
+  }
+}
+
+/* ═══════════════════════════════════════════
+   B2B DEMO — la vista que verían las marcas.
+   Datos agregados REALES del armario del usuario; nunca inventados.
+═══════════════════════════════════════════ */
+function brandStats(brand){
+  const gs=store.garments.filter(g=>(g.brand||'').toLowerCase()===brand.toLowerCase());
+  if(!gs.length)return null;
+  const n=gs.length;
+  const avgPrice=gs.reduce((s,g)=>s+(+g.price||0),0)/n;
+  const avgCpw=gs.reduce((s,g)=>s+cpw(g),0)/n;
+  const dead=gs.filter(g=>(g.worn||0)<=3).length;
+  const colors={}; gs.forEach(g=>(g.colors||[g.color]).filter(Boolean).forEach(c=>colors[c]=(colors[c]||0)+1));
+  const cats={}; gs.forEach(g=>{const k=g.catGroup||g.cat||'—';cats[k]=(cats[k]||0)+1;});
+  const sizes={}; gs.forEach(g=>{if(g.size)sizes[g.size]=(sizes[g.size]||0)+1;});
+  const top=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  // inteligencia de tallaje: feedback real "cómo te queda"
+  const fb={Pequeña:0,Perfecta:0,Grande:0}; let fbN=0;
+  gs.forEach(g=>{ if(g.fitFeedback&&fb[g.fitFeedback]!=null){fb[g.fitFeedback]++;fbN++;} });
+  // contexto cross-marca: qué otras marcas conviven en el mismo armario
+  const others={};
+  store.garments.forEach(g=>{ const b=g.brand; if(b&&b!=='—'&&b.toLowerCase()!==brand.toLowerCase()) others[b]=(others[b]||0)+1; });
+  // intención de compra: prendas de la marca en wishlist
+  const intent=(store.wishlist||[]).filter(w=>(w.brand||'').toLowerCase()===brand.toLowerCase()).length;
+  return {n,avgPrice,avgCpw,deadPct:Math.round(dead/n*100),
+    topColors:top(colors),topCats:top(cats),topSizes:top(sizes),
+    fitFb:fb,fitFbN:fbN,coBrands:top(others),wishIntent:intent};
+}
+function openB2BDemo(){
+  const brands=[...new Set(store.garments.map(g=>g.brand).filter(b=>b&&b!=='—'))];
+  if(!brands.length){ toast('Añade prendas con marca para ver la demo B2B'); return; }
+  let sel=brands[0];
+  const el=document.createElement('div'); el.className='ficha b2b'; el.id='b2bdemo';
+  const paint=()=>{
+    const s=brandStats(sel);
+    el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+      <div class="backbar b2b-bar"><button id="bb">${svg('back',20)}</button><span class="t">Drobe for Brands</span></div>
+      <div class="b2b-head">
+        <div class="b2b-eyebrow">Vista de marca · demo</div>
+        <div class="b2b-title">Lo que ${esc(sel)}<br>vería de sus clientes</div>
+      </div>
+      <div class="chips b2b-chips">${brands.map(b=>`<button class="chip ${b===sel?'on':''}" data-b="${esc(b)}">${esc(b)}</button>`).join('')}</div>
+      ${s?`
+      <div class="b2b-grid">
+        <div class="b2b-card"><div class="bn">${s.n}</div><div class="bl">Prendas en armarios</div></div>
+        <div class="b2b-card"><div class="bn">${s.avgPrice.toFixed(0)}€</div><div class="bl">Ticket medio</div></div>
+        <div class="b2b-card"><div class="bn">${s.avgCpw.toFixed(2)}€</div><div class="bl">Coste por uso</div></div>
+        <div class="b2b-card ${s.deadPct>=40?'warn':''}"><div class="bn">${s.deadPct}%</div><div class="bl">Prendas dormidas</div></div>
+      </div>
+      ${s.fitFbN?`<div class="b2b-sec">Inteligencia de tallaje · feedback real</div>
+      <div class="b2b-signal">${(()=>{const p=Math.round(s.fitFb['Pequeña']/s.fitFbN*100),g=Math.round(s.fitFb['Grande']/s.fitFbN*100);
+        return p>=34?`El <b>${p}%</b> de los compradores dice que ${esc(sel)} <b>talla pequeño</b>. Señal directa de devoluciones evitables.`
+        :g>=34?`El <b>${g}%</b> dice que ${esc(sel)} <b>talla grande</b>. Señal directa de devoluciones evitables.`
+        :`El <b>${Math.round(s.fitFb['Perfecta']/s.fitFbN*100)}%</b> confirma que el tallaje de ${esc(sel)} es fiel. Argumento de venta verificado.`;})()}</div>
+      <div class="b2b-rows" style="margin-top:12px">${['Pequeña','Perfecta','Grande'].map(k=>`<div class="b2b-row"><span>${k}</span><div class="b2b-bar-t"><div style="width:${s.fitFbN?Math.round(s.fitFb[k]/s.fitFbN*100):0}%"></div></div><span class="b2b-pct">${s.fitFbN?Math.round(s.fitFb[k]/s.fitFbN*100):0}%</span></div>`).join('')}</div>`:''}
+      ${s.wishIntent?`<div class="b2b-sec">Intención de compra activa</div>
+      <div class="b2b-signal"><b>${s.wishIntent}</b> prenda${s.wishIntent>1?'s':''} de ${esc(sel)} en wishlists, con precio objetivo declarado. Demanda medible antes de la venta.</div>`:''}
+      ${s.coBrands.length?`<div class="b2b-sec">Convive en armario con</div>
+      <div class="b2b-rows">${s.coBrands.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/store.garments.length*100)}%"></div></div><span class="b2b-pct">${v}</span></div>`).join('')}</div>`:''}
+      <div class="b2b-sec">Señal de comportamiento</div>
+      <div class="b2b-signal">${s.deadPct>0
+        ?`El <b>${s.deadPct}%</b> de las prendas ${esc(sel)} en armarios tienen 3 usos o menos. ${s.deadPct>=40?'Riesgo de percepción de bajo valor por uso.':'Uso saludable del producto.'}`
+        :`Todas las prendas ${esc(sel)} registradas están en uso activo.`}</div>
+      ${s.topSizes.length?`<div class="b2b-sec">Tallas reales compradas</div>
+      <div class="b2b-rows">${s.topSizes.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
+      ${s.topColors.length?`<div class="b2b-sec">Colores en armario</div>
+      <div class="b2b-rows">${s.topColors.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
+      ${s.topCats.length?`<div class="b2b-sec">Categorías</div>
+      <div class="b2b-rows">${s.topCats.map(([k,v])=>`<div class="b2b-row"><span>${esc(k)}</span><div class="b2b-bar-t"><div style="width:${Math.round(v/s.n*100)}%"></div></div><span class="b2b-pct">${Math.round(v/s.n*100)}%</span></div>`).join('')}</div>`:''}
+      `:''}
+      ${(()=>{ // contexto cross-marca: qué más hay en los armarios de sus clientes
+        const others={}; store.garments.forEach(g=>{const b=g.brand; if(b&&b!=='—'&&b.toLowerCase()!==sel.toLowerCase())others[b]=(others[b]||0)+1;});
+        const top=Object.entries(others).sort((a,b)=>b[1]-a[1]).slice(0,3);
+        const allAvg=store.garments.length?store.garments.reduce((x,g)=>x+(+g.price||0),0)/store.garments.length:0;
+        return top.length?`<div class="b2b-sec">Contexto competitivo</div>
+        <div class="b2b-signal">Sus clientes también tienen <b>${top.map(([b])=>esc(b)).join('</b>, <b>')}</b> en el armario, con un ticket medio global de <b>${allAvg.toFixed(0)}€</b>.</div>`:'';
+      })()}
+      ${(()=>{ // funnel de conversión en tienda (registro real de escaneos)
+        const scans=(store.scanLog||[]).filter(x=>(x.brand||'').toLowerCase()===sel.toLowerCase());
+        if(!scans.length)return '';
+        const bought=scans.filter(x=>x.bought).length;
+        const pos=scans.filter(x=>x.verdict==='comprar').length;
+        return `<div class="b2b-sec">Funnel en tienda física</div>
+        <div class="b2b-grid" style="margin-top:10px">
+          <div class="b2b-card"><div class="bn">${scans.length}</div><div class="bl">Escaneos del producto</div></div>
+          <div class="b2b-card"><div class="bn">${Math.round(pos/scans.length*100)}%</div><div class="bl">Veredicto «cómpralo»</div></div>
+          <div class="b2b-card"><div class="bn">${bought}</div><div class="bl">Compras confirmadas</div></div>
+          <div class="b2b-card"><div class="bn">${Math.round(bought/scans.length*100)}%</div><div class="bl">Conversión</div></div>
+        </div>`;
+      })()}
+      ${(()=>{ // demanda latente: wishlist de la marca
+        const wl=(store.wishlist||[]).filter(w=>(w.brand||'').toLowerCase()===sel.toLowerCase());
+        if(!wl.length)return '';
+        const avgT=wl.filter(w=>w.targetPrice).reduce((x,w)=>x+ +w.targetPrice,0)/(wl.filter(w=>w.targetPrice).length||1);
+        return `<div class="b2b-sec">Demanda latente</div>
+        <div class="b2b-signal"><b>${wl.length}</b> producto${wl.length>1?'s':''} de ${esc(sel)} en wishlist vigilando precio${avgT?`, con precio objetivo medio de <b>${avgT.toFixed(0)}€</b>`:''}. Intención de compra declarada, no inferida.</div>`;
+      })()}
+      <div class="b2b-foot">${svg('lock',14)} Demo con los datos agregados de tu propio armario. En producción: agregados anónimos de miles de usuarios, solo con consentimiento explícito.</div>
+    </div>`;
+    el.querySelector('#bb').onclick=()=>el.remove();
+    el.querySelectorAll('[data-b]').forEach(b=>b.onclick=()=>{sel=b.dataset.b;paint();});
+  };
+  paint();
+  document.body.appendChild(el);
+}
+
+/* ═══════════════════════════════════════════
+   RED SOCIAL — módulo autocontenido.
+   No toca el guardado ni render() del armario propio.
+═══════════════════════════════════════════ */
+let _mySocial=null;
+function avHTML(src,cls=''){
+  const isUrl=src&&(src.startsWith('http')||src.startsWith('data:'));
+  return isUrl?`<div class="soc-av ${cls}"><img src="${esc(src)}"/></div>`:`<div class="soc-av ${cls}">${esc(src||(cls?'U':'?'))}</div>`;
+}
+async function refreshUnread(){
+  try{
+    const n=await cloud.unreadCount();
+    const dot=document.getElementById('unread_dot');
+    if(dot)dot.style.display=n>0?'block':'none';
+  }catch(e){ logError('refreshUnread', e); }
+}
+
+async function openSocial(){
+  if(!session){ toast('Inicia sesión para usar la comunidad'); go('perfil'); return; }
+  const el=document.createElement('div'); el.className='ficha'; el.id='social';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="soc_b">${svg('back',20)}</button><span class="t">Comunidad</span></div>
+    <div id="soc_body"><div class="empty" style="padding-top:40px">${svg('load',26)}<div style="margin-top:10px">Cargando…</div></div></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#soc_b').onclick=()=>{stopChatPoll();el.remove();};
+  await renderSocialHome(el.querySelector('#soc_body'));
+}
+
+async function renderSocialHome(body){
+  _mySocial=await cloud.getMySocial();
+  if(!_mySocial||!_mySocial.username){ renderUsernameSetup(body); return; }
+  const { friends, incoming, outgoing }=await cloud.getFriendships();
+  body.innerHTML=`
+    <div class="soc-me">
+      ${avHTML(_mySocial.avatar||_mySocial.username[0].toUpperCase())}
+      <div style="flex:1"><div class="soc-name">${esc(_mySocial.display_name||_mySocial.username)}</div><div class="soc-handle">@${esc(_mySocial.username)} · <button id="soc_edit" style="color:var(--ink3);text-decoration:underline">editar</button></div></div>\n      <button class="fr-btn ghost" id="soc_share">${svg('send',14)}</button>
+    </div>
+
+    <div class="pubrow">
+      <div><div class="pub-t">Armario público</div><div class="pub-s">Cualquiera con tu enlace puede ver tu armario (sin precios).</div></div>
+      <label class="switch"><input type="checkbox" id="soc_pub" ${_mySocial.public?'checked':''}/><span></span></label>
+    </div>
+
+    <div class="soc-search">
+      ${svg('search',18)}<input id="soc_q" placeholder="Buscar por @usuario…" autocapitalize="off" autocorrect="off"/>
+    </div>
+    <div id="soc_results"></div>
+
+    ${incoming.length?`<div class="shead"><h2>Solicitudes</h2></div>
+      ${incoming.map(f=>friendRow(f,'incoming')).join('')}`:''}
+
+    <div class="shead"><h2>Amigos ${friends.length?`· ${friends.length}`:''}</h2></div>
+    ${friends.length?friends.map(f=>friendRow(f,'friend')).join(''):`<div class="soc-empty">Aún no tienes amigos. Búscalos por su @usuario y verás sus armarios cuando acepten.</div>`}
+    ${outgoing.length?`<div class="shead"><h2>Pendientes de aceptar</h2></div>${outgoing.map(f=>friendRow(f,'outgoing')).join('')}`:''}
+  `;
+
+  body.querySelector('#soc_edit')?.addEventListener('click',()=>renderUsernameSetup(body,true));
+  const shareBtn=body.querySelector('#soc_share');
+  if(shareBtn)shareBtn.onclick=async()=>{
+    if(!_mySocial.public){ toast('Activa primero el armario público'); return; }
+    const url=location.origin+location.pathname+'?u='+_mySocial.username;
+    if(navigator.share){ try{ await navigator.share({title:'Mi armario en Drobe',url}); }catch(e){} }
+    else { try{ await navigator.clipboard.writeText(url); toast('Enlace copiado'); }catch(e){ toast(url); } }
+  };
+  const pub=body.querySelector('#soc_pub');
+  if(pub)pub.onchange=async()=>{
+    const r=await cloud.setPublicWardrobe(pub.checked);
+    if(r.ok){ _mySocial.public=pub.checked; haptic(); toast(pub.checked?'Armario público activado':'Armario ahora privado'); }
+    else { pub.checked=!pub.checked; toast('No se pudo cambiar (¿ejecutaste el SQL?)'); }
+  };
+
+  // buscador
+  const q=body.querySelector('#soc_q'); const results=body.querySelector('#soc_results');
+  let t;
+  q.oninput=()=>{ clearTimeout(t); t=setTimeout(async()=>{
+    const term=q.value.trim();
+    if(term.length<2){ results.innerHTML=''; return; }
+    results.innerHTML=`<div class="soc-empty">${svg('load',16)} Buscando…</div>`;
+    const users=await cloud.searchUsers(term);
+    const known=new Set([...friends,...incoming,...outgoing].map(f=>f.otherId));
+    results.innerHTML=users.length?users.map(u=>`
+      <div class="friend-row">
+        ${avHTML(u.avatar||u.username[0].toUpperCase(),"sm")}
+        <div class="fr-info"><div class="fr-name">${esc(u.display_name||u.username)}</div><div class="fr-handle">@${esc(u.username)}</div></div>
+        ${known.has(u.id)?`<span class="fr-tag">Ya conectado</span>`:`<button class="fr-btn" data-add="${u.id}">Agregar</button>`}
+      </div>`).join(''):`<div class="soc-empty">Sin resultados para "${esc(term)}".</div>`;
+    results.querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; b.textContent='…';
+      const r=await cloud.sendFriendRequest(b.dataset.add);
+      if(r.ok){ b.textContent='Enviada'; b.classList.add('done'); }
+      else { b.textContent='Reintentar'; b.disabled=false; toast(r.reason||'No se pudo'); }
+    });
+  },320); };
+
+  // acciones en filas (aceptar/rechazar/abrir)
+  bindFriendRows(body);
+}
+
+function friendRow(f,kind){
+  const p=f.profile;
+  return `<div class="friend-row" data-fid="${f.id}" data-oid="${f.otherId}">
+    <div ${kind==='friend'?`data-open="${f.otherId}"`:''} style="cursor:pointer">${avHTML(p.avatar||(p.username||'U')[0].toUpperCase(),'sm')}</div>
+    <div class="fr-info" ${kind==='friend'?`data-open="${f.otherId}"`:''}>
+      <div class="fr-name">${esc(p.display_name||p.username)}</div><div class="fr-handle">@${esc(p.username)}</div></div>
+    ${kind==='incoming'?`<div class="fr-actions"><button class="fr-btn" data-accept="${f.id}">Aceptar</button><button class="fr-btn ghost" data-reject="${f.id}">✕</button></div>`
+      :kind==='outgoing'?`<span class="fr-tag">Pendiente</span>`
+      :`<button class="fr-btn ghost" data-open="${f.otherId}">Ver</button>`}
+  </div>`;
+}
+
+function bindFriendRows(body){
+  body.querySelectorAll('[data-accept]').forEach(b=>b.onclick=async(e)=>{ e.stopPropagation(); b.disabled=true; await cloud.respondFriend(b.dataset.accept,true); renderSocialHome(body); });
+  body.querySelectorAll('[data-reject]').forEach(b=>b.onclick=async(e)=>{ e.stopPropagation(); b.disabled=true; await cloud.respondFriend(b.dataset.reject,false); renderSocialHome(body); });
+  body.querySelectorAll('[data-open]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); openFriend(b.dataset.open); });
+}
+
+function renderUsernameSetup(body,edit){
+  body.innerHTML=`
+    <div class="title" style="font-size:30px;margin-bottom:6px">Elige tu<br>nombre de usuario</div>
+    <div class="sub" style="margin-bottom:20px">Así te encontrarán tus amigos para ver armarios y pedirte looks.</div>
+    <div class="field"><label>Nombre visible</label><input id="su_name" placeholder="${esc((store.profile?.name)||'Pepe')}" value="${esc(store.profile?.name||'')}"/></div>
+    <div class="field"><label>Usuario</label><input id="su_user" placeholder="pepe" autocapitalize="off" autocorrect="off" value="${edit&&_mySocial?esc(_mySocial.username):''}"/></div>
+    <div id="su_msg"></div>
+    <button class="btn dark" id="su_go" style="margin-top:8px">${edit?'Guardar cambios':'Crear mi perfil social'}</button>\n    ${edit?`<button class="btn ghost" id="su_back" style="margin-top:10px">Volver</button>`:''}`;
+  body.querySelector('#su_back')?.addEventListener('click',()=>renderSocialHome(body));
+  body.querySelector('#su_go').onclick=async function(){
+    const name=body.querySelector('#su_name').value.trim();
+    const user=body.querySelector('#su_user').value.trim();
+    const msg=body.querySelector('#su_msg');
+    this.disabled=true; this.textContent='Creando…';
+    const r=await cloud.setUsername(user,name);
+    if(r.ok){ renderSocialHome(body); }
+    else { msg.innerHTML=`<div class="sub" style="color:var(--danger);margin:8px 0">${esc(r.reason||'No se pudo')}</div>`; this.disabled=false; this.textContent='Crear mi perfil social'; }
+  };
+}
+
+/* prenda de un amigo: toda su info + encuéntrala para ti (nuevo primero, luego segunda mano) */
+async function openFriendGarment(g){
+  const old=document.getElementById('frgar'); if(old)old.remove();
+  const wrap=document.createElement('div'); wrap.id='frgar'; wrap.className='sheet-ov';
+  wrap.innerHTML=`<div class="sheet" style="max-height:86vh;overflow-y:auto">
+    <div class="sheet-bar"></div>
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      <div style="width:92px;height:115px;border-radius:12px;overflow:hidden;background:var(--surface);flex:none">${g.img?`<img src="${esc(g.img)}" style="width:100%;height:100%;object-fit:cover"/>`:''}</div>
+      <div style="flex:1">
+        <div class="sheet-t" style="margin-bottom:4px">${esc(g.brand||'')} ${esc(g.name||'')}</div>
+        <div class="sub">${[g.cat,g.color,g.material,g.size?('Talla '+g.size):'',g.cond].filter(Boolean).map(esc).join(' · ')}</div>
+      </div>
+    </div>
+    <button class="btn dark" id="fg_find" style="margin-top:16px">${svg('search',17)} Encuéntrala para ti</button>
+    <div id="fg_out"></div>
+    <button class="btn ghost" id="fg_close" style="margin-top:12px">Cerrar</button>
+  </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(()=>wrap.classList.add('show'));
+  const close=()=>{wrap.classList.remove('show');setTimeout(()=>wrap.remove(),300);};
+  wrap.onclick=e=>{if(e.target===wrap)close();};
+  wrap.querySelector('#fg_close').onclick=close;
+  wrap.querySelector('#fg_find').onclick=async function(){
+    this.disabled=true; this.innerHTML=`${svg('load',17)} Identificando el modelo…`; this.querySelector('svg').classList.add('spin');
+    const u=userContext();
+    const out=wrap.querySelector('#fg_out');
+    // 1) LA FOTO manda: identificar el modelo EXACTO antes de buscar
+    let q=`${g.brand||''} ${g.name||''}`.trim(), modelo='';
+    if(g.img&&g.img.startsWith('data:')){
+      const idr=await callAI('Eres experto en identificar productos de moda por foto. Devuelve SOLO JSON: {"modelo":"nombre EXACTO del modelo si lo reconoces con seguridad (ej: Samba OG, Air Force 1 07, 550), si no seguro deja vacío","query":"la mejor búsqueda para encontrar ESTE producto exacto: marca + modelo + color"}. Sé conservador: mejor vacío que inventar.',
+        `Marca según su dueño: ${g.brand||'?'}. Nombre: ${g.name||'?'}. Color: ${g.color||'?'}.`,
+        {dataUrl:g.img,data:g.img.split(',')[1]||''});
+      if(idr&&idr.query){ q=idr.query; modelo=idr.modelo||''; }
+    }
+    this.innerHTML=`${svg('load',17)} Buscando${modelo?' '+esc(modelo):''}…`; this.querySelector('svg')?.classList.add('spin');
+    const r=await searchOffersExtensive({query:q,brand:g.brand,productType:[modelo||g.cat,g.color].filter(Boolean).join(' '),ownedBrands:u.topBrands,sex:u.sex,avgPrice:u.avgPrice,maxPrice:g.price>0?Math.round(g.price*1.7):null,channel:'new'});
+    if(!wrap.isConnected)return;
+    let nItems=r?[...(r.exact||[]),...(r.alternatives||[])]:[];
+    // 2) coherencia de precio en lo NUEVO: 110€ no se compara con 30€
+    if(g.price>0)nItems=nItems.filter(o=>!o.price_value||(o.price_value>=g.price*0.35&&o.price_value<=g.price*1.7));
+    // 3) el modelo identificado debe estar en el título (si lo tenemos)
+    if(modelo)nItems=nItems.filter(o=>(o.title||'').toLowerCase().includes(modelo.toLowerCase().split(' ')[0]));
+    this.style.display='none';
+    out.innerHTML=nItems.length
+      ?`<div class="shead" style="margin-top:16px"><h2>${svg('tag',15)} ${modelo?esc(modelo)+' · disponible nueva':'Disponible nueva'}</h2></div>`+nItems.slice(0,4).map(offerRowHTML).join('')
+      :`<div class="sub" style="margin-top:14px">No encuentro ${modelo?'el modelo '+esc(modelo):'esta prenda'} nueva${g.price>0?' en su rango de precio':''} — puede estar descatalogada. Pruebo en segunda mano:</div>`;
+    appendUsedSection(out,{query:q,brand:g.brand,productType:modelo||g.cat,ownedBrands:u.topBrands,sex:u.sex,avgPrice:u.avgPrice});
+  };
+}
+
+/* ---- armario de un amigo (navegable, solo lectura) + chat ---- */
+async function openFriend(friendId, tab='wardrobe'){
+  const el=document.createElement('div'); el.className='ficha'; el.id='friend';
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="fr_b">${svg('back',20)}</button><span class="t" id="fr_title">Amigo</span></div>
+    <div class="viewseg" style="margin-bottom:16px">
+      <button class="vseg ${tab==='wardrobe'?'on':''}" data-tab="wardrobe">${svg('hanger',16)} Armario</button>
+      <button class="vseg ${tab==='chat'?'on':''}" data-tab="chat">${svg('chat',16)} Chat</button>
+    </div>
+    <div id="fr_body"><div class="empty" style="padding-top:30px">${svg('load',24)}</div></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#fr_b').onclick=()=>{ stopChatPoll(); el.remove(); };
+  el.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ stopChatPoll(); openFriendTab(el,friendId,b.dataset.tab); });
+  // nombre del amigo en la cabecera
+  cloud.getFriendships().then(({friends})=>{
+    const f=friends.find(x=>x.otherId===friendId);
+    const tt=el.querySelector('#fr_title');
+    if(f&&tt)tt.textContent=f.profile.display_name||('@'+f.profile.username);
+  }).catch(()=>{});
+  openFriendTab(el,friendId,tab);
+}
+
+async function openFriendTab(el,friendId,tab){
+  el.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
+  const body=el.querySelector('#fr_body');
+  if(tab==='wardrobe'){
+    body.innerHTML=`<div class="empty" style="padding-top:30px">${svg('load',24)}<div style="margin-top:8px">Abriendo su armario…</div></div>`;
+    const garments=await cloud.getFriendWardrobe(friendId);
+    if(garments===null){ body.innerHTML=`<div class="soc-empty">No puedes ver este armario. Puede que la amistad ya no exista.</div>`; return; }
+    if(!garments.length){ body.innerHTML=`<div class="soc-empty">Su armario está vacío por ahora.</div>`; return; }
+    body.innerHTML=`<div class="note" style="margin-bottom:14px">${svg('spark',16)}<span>Estás viendo su armario. Elige prendas y mándale un look con el botón de abajo.</span></div>
+      <div class="grid" id="fr_grid">${garments.map(g=>`
+        <div class="gcard" data-pick="${g.id}">
+          <div class="ph">${g.img?`<img loading="lazy" decoding="async" src="${esc(g.img)}"/>`:''}<span class="pick-check">${svg('check',16)}</span><button class="fr-info" data-info="${g.id}" aria-label="Ver prenda">${svg('search',13)}</button></div>
+          <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div></div>
+        </div>`).join('')}</div>
+      <button class="btn dark" id="fr_sendlook" style="position:sticky;bottom:16px;margin-top:16px;opacity:.5" disabled>${svg('send',18)} Envíale este look (0)</button>`;
+    const picked=new Set();
+    const btn=body.querySelector('#fr_sendlook');
+    body.querySelectorAll('[data-info]').forEach(btn=>btn.onclick=e=>{
+      e.stopPropagation();
+      const g=garments.find(x=>x.id===btn.dataset.info);
+      if(g)openFriendGarment(g);
+    });
+    body.querySelectorAll('[data-pick]').forEach(c=>c.onclick=()=>{
+      const id=c.dataset.pick;
+      if(picked.has(id)){picked.delete(id);c.classList.remove('picked');}else{picked.add(id);c.classList.add('picked');}
+      btn.disabled=picked.size===0; btn.style.opacity=picked.size?'1':'.5';
+      btn.innerHTML=`${svg('send',18)} Envíale este look (${picked.size})`;
+    });
+    btn.onclick=async()=>{
+      btn.disabled=true; btn.innerHTML=`${svg('load',18)} Enviando…`;
+      const r=await cloud.sendMessage(friendId,{type:'look',body:'Te propongo este look 👗',payload:{ownerId:friendId,garmentIds:[...picked]}});
+      if(r.ok){ openFriendTab(el,friendId,'chat'); }
+      else { btn.disabled=false; btn.innerHTML=`${svg('send',18)} Reintentar`; toast(r.reason||'No se pudo enviar'); }
+    };
+  } else {
+    body.innerHTML=`<div class="chat-scroll" id="chat_scroll"></div>
+      <div class="chat-input"><input id="chat_text" placeholder="Escribe un mensaje…"/><button id="chat_send">${svg('send',18)}</button></div>`;
+    const scroll=body.querySelector('#chat_scroll');
+    const loadMsgs=async()=>{
+      const msgs=await cloud.getMessages(friendId);
+      await cloud.markMessagesRead(friendId); refreshUnread();
+      scroll.innerHTML=msgs.length?msgs.map(renderMsg).join(''):`<div class="soc-empty">Aún no hay mensajes. ¡Salúdale!</div>`;
+      scroll.scrollTop=scroll.scrollHeight;
+      scroll.querySelectorAll('[data-look]').forEach(b=>b.onclick=()=>showLookMessage(b.dataset.look));
+    };
+    await loadMsgs();
+    startChatPoll(loadMsgs);
+    const send=async()=>{
+      const t=body.querySelector('#chat_text'); const v=t.value.trim(); if(!v)return;
+      t.value='';
+      haptic();
+      const r=await cloud.sendMessage(friendId,{type:'text',body:v});
+      if(r.ok)loadMsgs(); else toast(r.reason||'No se pudo enviar');
+    };
+    body.querySelector('#chat_send').onclick=send;
+    body.querySelector('#chat_text').onkeydown=(e)=>{ if(e.key==='Enter')send(); };
+  }
+}
+
+function msgTime(iso){ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return '';
+  const today=new Date().toDateString()===d.toDateString();
+  return (today?'':d.toLocaleDateString('es-ES',{day:'numeric',month:'short'})+' · ')+d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+}
+function renderMsg(m){
+  if(m.type==='look'){
+    const ids=(m.payload&&m.payload.garmentIds)||[];
+    return `<div class="msg ${m.mine?'mine':''}">
+      <div class="msg-look" data-look='${esc(JSON.stringify(m.payload||{}))}'>
+        ${svg('hanger',16)} ${m.mine?'Le propusiste':'Te propone'} un look · ${ids.length} prenda(s)
+        <span class="msg-look-cta">Ver look</span>
+      </div>
+      ${m.body?`<div class="msg-b">${esc(m.body)}</div>`:''}
+    </div>`;
+  }
+  return `<div class="msg ${m.mine?'mine':''}"><div class="msg-b">${esc(m.body||'')}</div><div class="msg-t">${msgTime(m.created_at)}</div></div>`;
+}
+
+async function showLookMessage(payloadStr){
+  let payload; try{payload=JSON.parse(payloadStr);}catch(e){return;}
+  const ids=payload.garmentIds||[]; const ownerId=payload.ownerId;
+  const ov=document.createElement('div'); ov.className='ficha'; ov.id='lookview'; ov.style.zIndex='300';
+  ov.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="lv_b">${svg('back',20)}</button><span class="t">El look propuesto</span></div>
+    <div id="lv_body"><div class="empty" style="padding-top:30px">${svg('load',24)}</div></div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#lv_b').onclick=()=>ov.remove();
+  // las prendas pueden ser mías (yo soy el owner) o de un amigo
+  let garments=null;
+  const mine=store.garments.filter(g=>ids.includes(g.id));
+  if(mine.length===ids.length) garments=mine;
+  else { const fw=await cloud.getFriendWardrobe(ownerId); garments=(fw||[]).filter(g=>ids.includes(g.id)); }
+  const body=ov.querySelector('#lv_body');
+  body.innerHTML=garments&&garments.length?`<div class="grid">${garments.map(g=>`
+    <div class="gcard"><div class="ph">${g.img?`<img loading="lazy" decoding="async" src="${esc(g.img)}"/>`:''}</div>
+    <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div></div></div>`).join('')}</div>`
+    :`<div class="soc-empty">No se pudieron cargar las prendas de este look.</div>`;
+}
+
+// polling del chat (robusto y simple; se detiene al salir)
+let _chatPoll=null;
+function startChatPoll(fn){ stopChatPoll(); _chatPoll=setInterval(fn,4000); }
+function stopChatPoll(){ if(_chatPoll){clearInterval(_chatPoll);_chatPoll=null;} }
+
+// toast genérico ligero (reutiliza estilo de syncwarn)
+function toast(txt){
+  const old=document.getElementById('gtoast'); if(old)old.remove();
+  const el=document.createElement('div'); el.id='gtoast'; el.className='syncwarn'; el.style.background='var(--noir)'; el.style.color='#F2F3F5';
+  el.innerHTML=`${svg('spark',16)} ${esc(txt)}`;
+  document.body.appendChild(el); setTimeout(()=>el.remove(),3500);
+}
+
+/* ═══ DIAGNÓSTICO ═══
+   Antes, cuando algo fallaba no quedaba rastro en ningún sitio. Aquí está todo:
+   qué ha fallado, con qué perfil está trabajando Drobe y si la nube responde.
+   El botón de copiar genera un informe pegable en un issue o en una
+   conversación con Claude. */
+function openDiagnostico(){
+  const el=document.createElement('div'); el.className='ficha'; el.id='diag';
+  const P=(()=>{ try{ return tasteProfile(); }catch(e){ return null; } })();
+  const rows=errorLog().slice().reverse();
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="db">${svg('back',20)}</button><span class="t">Diagnóstico</span></div>
+
+    <div class="shead"><h2>Estado</h2></div>
+    <div class="diag">
+      <div class="diag-row"><b>Sesión</b> <span class="sc">${session?esc(session.user?.email||'iniciada'):'sin iniciar (solo local)'}</span></div>
+      <div class="diag-row"><b>Nube</b> <span class="sc">${cloud.cloudEnabled()?'configurada':'no configurada'}</span></div>
+      <div class="diag-row"><b>Prendas</b> <span class="sc">${store.garments.length} · ${(store.tickets||[]).length} tickets · ${(store.wishlist||[]).length} en wishlist</span></div>
+      <div class="diag-row"><b>Versión de caché</b> <span class="sc" id="dg_sw">—</span></div>
+      <div class="diag-row"><b>Conexión</b> <span class="sc">${navigator.onLine?'en línea':'sin conexión'}</span></div>
+    </div>
+
+    <div class="shead" style="margin-top:16px"><h2>Perfil de gusto</h2></div>
+    <div class="diag">
+      ${P?`
+      <div class="diag-row"><b>Fiabilidad</b> <span class="sc">${Math.round(P.confidence*100)}% ${P.confidence<0.4?'· aún con pocos datos':''}</span></div>
+      <div class="diag-row"><b>Marcas</b> <span class="sc">${esc(P.topBrands.slice(0,5).join(', ')||'—')}</span></div>
+      <div class="diag-row"><b>Descartadas</b> <span class="sc">${esc(P.rejectedBrands.slice(0,4).join(', ')||'—')}</span></div>
+      <div class="diag-row"><b>Paleta</b> <span class="sc">${esc(P.topColors.slice(0,4).join(', ')||'—')} · ${Math.round(P.neutralRatio*100)}% neutros</span></div>
+      <div class="diag-row"><b>Precio por categoría</b> <span class="sc">${esc(Object.entries(P.priceBands).filter(([,b])=>b.n>=2).map(([k,b])=>`${k} ${Math.round(b.p25)}-${Math.round(b.p75)}€`).join(' · ')||'—')}</span></div>
+      <div class="diag-row"><b>Tallas</b> <span class="sc">${esc(Object.entries(P.sizeByCat).map(([k,v])=>k+' '+v).join(' · ')||'—')}</span></div>
+      <div class="diag-row"><b>Huecos</b> <span class="sc">${esc(P.gaps.join(', ')||'ninguno')}</span></div>
+      `:'<div class="diag-empty">No se pudo calcular el perfil.</div>'}
+    </div>
+
+    <div class="shead" style="margin-top:16px"><h2>Incidencias (${rows.length})</h2></div>
+    <div class="diag" id="dg_errs">
+      ${rows.length?rows.slice(0,40).map(e=>`<div class="diag-row ${e.fatal?'fatal':''}">
+        <b>${esc(e.scope)}</b> <span class="sc">${esc(new Date(e.at).toLocaleString('es-ES'))}</span><br/>${esc(e.message||'')}
+      </div>`).join(''):'<div class="diag-empty">Nada que reportar. Todo ha ido bien.</div>'}
+    </div>
+
+    <button class="btn dark" id="dg_copy" style="margin-top:14px">${svg('file',17)} Copiar informe</button>
+    <button class="btn ghost" id="dg_probe" style="margin-top:8px">${svg('sync',17)} Probar conexión con la nube</button>
+    <button class="btn ghost" id="dg_clear" style="margin-top:8px">Borrar registro</button>
+    <div id="dg_out" class="sub" style="margin-top:10px"></div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#db').onclick=()=>el.remove();
+
+  // versión del service worker activo
+  if(navigator.serviceWorker?.controller){
+    caches.keys().then(k=>{ const n=el.querySelector('#dg_sw'); if(n)n.textContent=k.join(', ')||'sin caché'; })
+      .catch(e=>logError('diag.caches',e));
+  } else { const n=el.querySelector('#dg_sw'); if(n)n.textContent='service worker no activo'; }
+
+  el.querySelector('#dg_copy').onclick=async function(){
+    const txt=errorReport()+'\n\nPERFIL\n'+(P?JSON.stringify({confidence:P.confidence,topBrands:P.topBrands,rejectedBrands:P.rejectedBrands,priceBands:P.priceBands,sizeByCat:P.sizeByCat,gaps:P.gaps,segment:P.segment},null,2):'no disponible');
+    try{ await navigator.clipboard.writeText(txt); this.innerHTML=`${svg('check',17)} Copiado`; }
+    catch(e){ logError('diag.copy',e); el.querySelector('#dg_out').textContent='No se pudo copiar. El informe también está en la consola.'; console.log(txt); }
+  };
+  el.querySelector('#dg_probe').onclick=async function(){
+    this.disabled=true; this.textContent='Probando…';
+    const out=el.querySelector('#dg_out');
+    try{
+      const d=await cloud.diagnose();
+      out.textContent=JSON.stringify(d);
+    }catch(e){ logError('diag.probe',e); out.textContent='Error: '+(e.message||e); }
+    this.disabled=false; this.innerHTML=`${svg('sync',17)} Probar conexión con la nube`;
+  };
+  el.querySelector('#dg_clear').onclick=()=>{ clearErrorLog(); el.remove(); openDiagnostico(); };
+}
+
+/* ═══ STRAVA: km reales de zapatillas y bicis ═══ */
+async function stravaConfig(){
+  if(window._stravaCfg!==undefined)return window._stravaCfg;
+  try{ const r=await fetch('/api/strava'); window._stravaCfg=await r.json(); }
+  catch(e){ window._stravaCfg={configured:false}; }
+  return window._stravaCfg;
+}
+function stravaConnect(cfg){
+  try{localStorage.setItem('drobe.strava_pending','1');}catch(e){ logError('strava.pending', e); }
+  const redirect=encodeURIComponent(location.origin+location.pathname);
+  location.href=`https://www.strava.com/oauth/authorize?client_id=${cfg.client_id}&redirect_uri=${redirect}&response_type=code&scope=read&approval_prompt=auto`;
+}
+async function stravaHandleReturn(){
+  const code=new URLSearchParams(location.search).get('code');
+  let pending=false; try{pending=localStorage.getItem('drobe.strava_pending')==='1';}catch(e){ logError('strava.pending', e); }
+  if(!code||!pending)return;
+  try{localStorage.removeItem('drobe.strava_pending');}catch(e){ logError('strava.pending', e); }
+  history.replaceState(null,'',location.pathname);
+  const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'token',code})}).then(x=>x.json()).catch(()=>null);
+  if(r&&r.ok){
+    store.profile=store.profile||{};
+    store.profile.strava={access_token:r.access_token,refresh_token:r.refresh_token,expires_at:r.expires_at,name:r.athlete?.firstname||''};
+    save(); toast('Strava conectado'+(r.athlete?.firstname?', '+r.athlete.firstname:'')); render();
+  } else toast('No se pudo conectar Strava: '+((r&&r.reason)||'error'));
+}
+async function stravaToken(){
+  const st=store.profile?.strava; if(!st)return null;
+  if(st.expires_at&&st.expires_at*1000>Date.now()+60000)return st.access_token;
+  const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'refresh',refresh_token:st.refresh_token})}).then(x=>x.json()).catch(()=>null);
+  if(r&&r.ok){ Object.assign(st,{access_token:r.access_token,refresh_token:r.refresh_token,expires_at:r.expires_at}); save(); return r.access_token; }
+  return null;
+}
+async function stravaSyncGear(){
+  const tok=await stravaToken();
+  if(!tok){ toast('Reconecta Strava'); delete store.profile.strava; save(); render(); return; }
+  const r=await fetch('/api/strava',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'gear',access_token:tok})}).then(x=>x.json()).catch(()=>null);
+  if(!r||!r.ok){ toast('No se pudo leer tu material de Strava'); return; }
+  // actualizar automáticamente prendas ya vinculadas
+  const all=[...(r.shoes||[]),...(r.bikes||[])];
+  let updated=0;
+  store.garments.forEach(g=>{ const m=all.find(x=>x.id===g.stravaGear); if(m&&g.km!==m.km){ g.km=m.km; updated++; if(session)cloud.pushGarment(g); } });
+  if(updated)save();
+  openStravaGear(r,updated);
+}
+function openStravaGear(r,updated){
+  const el=document.createElement('div'); el.className='ficha'; el.id='stravagear';
+  const shoes=r.shoes||[];
+  const cands=store.garments.filter(g=>g.context==='deporte'||/(zapatilla|sneaker|running)/i.test(g.cat+' '+g.name));
+  el.innerHTML=`<div class="ficha-body" style="padding-top:calc(env(safe-area-inset-top) + 18px)">
+    <div class="backbar"><button id="sgb">${svg('back',20)}</button><span class="t">Material de Strava</span></div>
+    ${updated?`<div class="note" style="margin-bottom:12px">${svg('check',16)}<span>${updated} prenda(s) actualizadas con km reales.</span></div>`:''}
+    ${shoes.length?'':`<div class="soc-empty">No hay zapatillas registradas en tu Strava.</div>`}
+    ${shoes.map(sh=>{
+      const linked=store.garments.find(g=>g.stravaGear===sh.id);
+      return `<div class="tk-card"><div class="tk-body">
+        <div class="tk-store">${esc(sh.name)}</div>
+        <div class="tk-meta">${sh.km} km reales${sh.km>=600?' · <b style="color:var(--accent)">zona de renovación</b>':''}</div>
+        ${linked?`<div class="tk-badge ok">${svg('check',12)} Vinculada a ${esc(linked.brand)} ${esc(linked.name)}</div>`
+        :cands.length?`<select class="sg-sel" data-gear="${esc(sh.id)}" data-km="${sh.km}"><option value="">Vincular a una prenda…</option>${cands.map(g=>`<option value="${g.id}">${esc(g.brand)} ${esc(g.name)}</option>`).join('')}</select>`
+        :`<div class="tk-badge off">Añade tus zapatillas al armario para vincularlas</div>`}
+      </div></div>`;}).join('')}
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#sgb').onclick=()=>el.remove();
+  el.querySelectorAll('.sg-sel').forEach(s=>s.onchange=()=>{
+    const g=findG(s.value); if(!g)return;
+    g.stravaGear=s.dataset.gear; g.km=Number(s.dataset.km); g.context='deporte'; g.sport=g.sport||'Run';
+    save(); if(session)cloud.pushGarment(g); haptic(); el.remove(); stravaSyncGear();
+  });
+}
+
+/* ═══ ARMARIO PÚBLICO (?u=usuario): entrada cinematográfica ═══ */
+async function tryPublicView(){
+  const uname=new URLSearchParams(location.search).get('u');
+  if(!uname)return false;
+  const app=document.getElementById('app');
+  // puertas cerradas mientras carga: el logo respira en el centro
+  app.innerHTML=`
+    <div class="doors" id="doors">
+      <div class="door l"><span class="knob"></span></div>
+      <div class="door r"><span class="knob"></span></div>
+      <div class="doors-light"></div>
+      <div class="doors-logo"><div class="dl-mark">${dmark(58,'#F2F3F5')}</div><div class="dl-name">DROBE</div><div class="dl-sub">Abriendo el armario</div>
+        <div class="dl-dust">${Array.from({length:14},(_,i)=>`<i style="left:${6+i*6.5}%;animation-delay:${(i%7)*0.6}s;animation-duration:${5+(i%5)}s"></i>`).join('')}</div>
+      </div>
+    </div>
+    <main id="main" style="padding-top:0;padding-bottom:40px"></main>`;
+  const openDoors=()=>{ const d=document.getElementById('doors'); if(!d)return;
+    d.classList.add('open'); setTimeout(()=>d.remove(),1900); };
+  const main=document.getElementById('main');
+  const data=await cloud.getPublicWardrobe(uname).catch(()=>null);
+  if(!data){
+    main.innerHTML=`<div class="empty" style="padding-top:120px">${svg('lock',26)}<div style="margin-top:12px">Este armario no existe o no es público.</div>
+      <a href="${location.pathname}" class="btn dark" style="margin-top:20px;max-width:240px;text-decoration:none">Abrir Drobe</a></div>`;
+    setTimeout(openDoors,400);
+    return true;
+  }
+  const {profile:sp,garments:gs}=data;
+  const visible=gs.filter(g=>g.status!=='venta');
+  main.innerHTML=`
+    <div class="pub-hero">
+      <div class="pub-eyebrow">Drobe · Armario</div>
+      ${avHTML(sp.avatar||(sp.username[0]||'U').toUpperCase(),'xl')}
+      <div class="pub-title">El armario de<br><em>${esc(sp.display_name||sp.username)}</em></div>
+      <div class="pub-meta">@${esc(sp.username)} · ${visible.length} prendas</div>
+    </div>
+    <div style="padding:0 22px">
+      <div class="grid" style="margin-top:22px">${visible.map((g,i)=>`
+        <div class="gcard reveal" data-pub="${g.id}" style="animation-delay:${0.9+Math.min(i,12)*0.06}s;cursor:pointer">
+          <div class="ph"><img loading="lazy" decoding="async" src="${esc(g.img||'')}"/><button class="fr-info" aria-label="Ver prenda">${svg('search',13)}</button></div>
+          <div class="cap"><div class="b">${esc(g.brand||'')}</div><div class="n">${esc(g.name||'')}</div><div class="m">${esc(g.cat||'')} · ${esc(g.color||'')}</div></div>
+        </div>`).join('')}</div>
+      <a href="${location.pathname}" class="btn dark" style="margin-top:28px;text-decoration:none">${svg('spark',18)} Crea tu armario con Drobe</a>
+    </div>`;
+  main.querySelectorAll('[data-pub]').forEach(c=>c.onclick=()=>{
+    const g=visible.find(x=>x.id===c.dataset.pub);
+    if(g)openFriendGarment(g);
+  });
+  setTimeout(openDoors,650); // un respiro con las puertas cerradas y… se abren
+  return true;
+}
+
+/* ═══════════════════════════════════════════
+   CLOUD + ARRANQUE
+═══════════════════════════════════════════ */
+/* ═══ NAVEGACIÓN ATRÁS ═══
+   Dos cosas distintas que antes estaban mezcladas y rotas:
+
+   1. EL BOTÓN ATRÁS DEL MÓVIL (o el del navegador, o el gesto). Antes se
+      apilaba una entrada de historial por CADA overlay nuevo —y la ficha se
+      repinta entera al tocar cualquier cosa, así que una ficha abierta podía
+      dejar diez—, y cerrar con la flecha de la app no quitaba ninguna. Luego
+      había que pulsar atrás diez veces para que pasara algo. Y al pulsarlo se
+      borraba el overlay a lo bruto: con la ficha, `fichaId` seguía puesto y la
+      siguiente pintada la volvía a abrir.
+      Ahora hay UNA sola entrada «centinela» mientras haya algo que cerrar, y
+      pulsar atrás hace exactamente lo mismo que tocar la flecha de la app.
+
+   2. LA RED DE SEGURIDAD. Si el manejador de una flecha revienta (como pasaba
+      en la maleta), la pantalla no se puede quedar sin salida: si al rato la
+      flecha sigue ahí, se cierra igual y el fallo queda registrado. */
+const OVERLAYS='.ficha,.sheet-ov,.tk-lightbox';
+function topOverlay(){ const ovs=document.querySelectorAll(OVERLAYS); return ovs.length?ovs[ovs.length-1]:null; }
+function hayQueCerrar(){ return !!topOverlay() || route!=='armario'; }
+let centinela=false, ignorarPop=0;
+function sincronizaHistorial(){
+  try{
+    const hace=hayQueCerrar();
+    if(hace&&!centinela){ history.pushState({drobe:1},''); centinela=true; }
+    else if(!hace&&centinela){ centinela=false; ignorarPop++; history.back(); }
+  }catch(e){ logError('historial',e); }
+}
+/* Cerrar lo de arriba del todo como lo cerraría el usuario: con SU botón, para
+   que corran sus efectos (parar el chat, soltar la ficha, volver al paso
+   anterior de la maleta…). */
+function cerrarArriba(){
+  const ov=topOverlay();
+  if(ov){
+    if(ov.id==='ficha'&&fichaId){ closeFicha(); return; }
+    const b=ov.querySelector('.backbar button,.ficha-close');
+    if(b){ b.click(); return; }
+    if(ov.classList.contains('sheet-ov')){ ov.dispatchEvent(new MouseEvent('click',{bubbles:true})); if(ov.isConnected)setTimeout(()=>ov.isConnected&&ov.remove(),350); return; }
+    ov.remove(); return;
+  }
+  const b=document.querySelector('#main .backbar button');
+  if(b){ b.click(); return; }
+  if(route!=='armario') go('armario');
+}
+window.addEventListener('popstate',()=>{
+  if(ignorarPop>0){ ignorarPop--; return; }
+  centinela=false;
+  try{ cerrarArriba(); }catch(e){ logError('atras.popstate',e); }
+  // Si aún queda algo que cerrar, se rearma el centinela.
+  setTimeout(sincronizaHistorial,0);
+});
+new MutationObserver(()=>sincronizaHistorial()).observe(document.body,{childList:true});
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.backbar button,.ficha-close');
+  if(!b)return;
+  const ov=b.closest(OVERLAYS);
+  setTimeout(()=>{
+    if(!b.isConnected)return;                          // funcionó: la pantalla cambió
+    if(ov&&!ov.isConnected)return;
+    logError('atras.sin_efecto', new Error('La flecha no hizo nada: '+(b.id||ov?.id||'?')));
+    try{ stopChatPoll(); }catch(err){ /* sin chat abierto: no hay nada que parar */ }
+    if(ov){ if(ov.id==='ficha'){ fichaId=null; } ov.remove(); }
+    else { addMode='choose'; if(route==='add')vAdd(document.getElementById('main')); else go('armario'); }
+  },450);
+},true);
+
+/* ═══ ABRIR UNA OFERTA EN LA WEB DE LA TIENDA ═══
+   Google Shopping ya no da el enlace de la tienda: da el de su propia ficha,
+   que en el móvil se abre mal. Al tocar una oferta se pide el enlace real
+   (`/api/shopping`, modo `enlace`, una búsqueda) y se abre la ficha del
+   producto en la web de la misma tienda que salía en la tarjeta.
+   La ventana se abre EN EL TOQUE, antes de esperar a la red: si se abre
+   después, Safari la bloquea por no venir de un gesto del usuario. */
+const ENLACES_TIENDA=new Map();
+async function resolverEnlace(token,source){
+  const k=token+'|'+source;
+  if(ENLACES_TIENDA.has(k))return ENLACES_TIENDA.get(k);
+  try{
+    const ctrl=new AbortController(); const tm=setTimeout(()=>ctrl.abort(),9000);
+    const r=await fetch('/api/shopping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'enlace',token,source}),signal:ctrl.signal});
+    clearTimeout(tm);
+    const d=await r.json();
+    const link=d&&d.ok&&/^https?:\/\//i.test(d.link||'')?d.link:'';
+    if(link)ENLACES_TIENDA.set(k,link);
+    else logError('enlace.tienda',new Error(d&&d.error||'sin enlace'));
+    return link;
+  }catch(e){ logError('enlace.tienda',e); return ''; }
+}
+document.addEventListener('click',e=>{
+  const a=e.target.closest('a[data-tok]');
+  if(!a||a.dataset.resuelto)return;           // ya lleva el enlace de la tienda: se abre tal cual
+  if(e.metaKey||e.ctrlKey||e.shiftKey)return;
+  e.preventDefault();
+  if(a.classList.contains('abriendo'))return;
+  const tienda=a.dataset.src||'la tienda';
+  let w=null;
+  try{
+    w=window.open('','_blank');
+    if(w){ w.opener=null; w.document.write(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Abriendo ${esc(tienda)}…</title><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;font:16px system-ui;color:#5B5F66;background:#FBFBFC">Abriendo ${esc(tienda)}…</body>`); }
+  }catch(err){ w=null; }
+  a.classList.add('abriendo');
+  resolverEnlace(a.dataset.tok,a.dataset.src||'').then(link=>{
+    const destino=link||a.href;
+    if(link){ a.href=link; a.dataset.resuelto='1'; }
+    if(w&&!w.closed){ try{ w.location.replace(destino); }catch(err){ window.location.href=destino; } }
+    else window.location.href=destino;
+  }).finally(()=>a.classList.remove('abriendo'));
+});
+
+tryPublicView().then(isPublic=>{
+  if(isPublic)return;
+  render();
+  initCloud();
+  loadWeather();
+  stravaHandleReturn();
+  // precargar el motor de foto de estudio en segundo plano: cuando el usuario
+  // lo toque por primera vez, el modelo ya está descargado (ahí está el wow)
+  const idle=window.requestIdleCallback||(fn=>setTimeout(fn,4000));
+  idle(()=>{ loadBgLib().then(lib=>{ try{ lib&&lib.preload&&lib.preload(bgConfig()); }catch(e){ logError('bgRemoval.preload', e); } }).catch(e=>logError('bgRemoval.load', e)); });
+  if(needsWelcome())setTimeout(()=>renderWelcome('intro'),300);
+});
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(e=>logError('serviceWorker', e)));
+
+async function initCloud(){
+  if(!cloud.cloudEnabled())return;
+  try{
+    session=await cloud.getSession();
+    cloud.onAuth(async ns=>{
+      session=ns;
+      try{ await syncFromCloud(); }catch(e){ logError('syncFromCloud', e, {user:'No se pudo sincronizar con la nube. Tus cambios están guardados en este dispositivo.'}); }
+      safeRender();
+    });
+    if(session)await syncFromCloud();
+    safeRender();
+  }catch(e){
+    logError('initCloud', e, {user:'No se pudo conectar con la nube. La app funciona en local mientras tanto.'});
+    safeRender();
+  }
+}
+function safeRender(){ if(route==='add'&&addMode!=='choose')return; render(); }
+/* El almacenamiento local pertenece a UNA cuenta. Al entrar con una cuenta
+   distinta (o crear una nueva), se parte de cero: los datos de la demo o de
+   otro usuario JAMÁS se mezclan ni se suben a la cuenta nueva. */
+/* Claves de localStorage que contienen datos de UNA persona. Al cambiar de
+   cuenta hay que barrerlas todas, no solo el armario: si no, el historial de
+   escaneos, el registro de errores y el token de Strava del anterior siguen
+   ahí y se mezclan con los del siguiente. */
+const CLAVES_POR_USUARIO = ['drobe.v3.corrupto','drobe.scan_events','drobe.strava_pending','drobe.errors','drobe.seen','drobe.tour'];
+function borrarRastroLocal(){
+  CLAVES_POR_USUARIO.forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+  try{ clearErrorLog(); }catch(e){}
+}
+
+let adoptadas = 0;   // prendas rescatadas de la sesión sin cuenta, para avisar
+const tienda_vacia = uid => ({garments:[],profile:{},maletas:[],tickets:[],wishlist:[],scanLog:[],deletedIds:[],ownerId:uid||null});
+const ES_SEMILLA = new Set(SEED.map(g=>g.id));
+
+/* El almacenamiento local pertenece a UNA cuenta.
+
+   Antes esto vaciaba el armario en cuanto el uid no coincidía — incluido el
+   caso de alguien que había estado probando la app SIN cuenta y se registraba
+   después. Ese usuario perdía todo lo que había metido, en silencio, justo
+   después de que la app le prometiera que sus prendas "se guardarán en este
+   dispositivo". Ahora se distingue:
+
+   - Nunca reclamado (ownerId ausente): las prendas no son de nadie todavía,
+     así que las adopta la cuenta que entra y se suben a la nube.
+   - Otra cuenta: se borra todo. Los datos de una persona jamás se mezclan
+     con los de otra. */
+function alignStoreToAccount(){
+  const uid=session?.user?.id; if(!uid)return;
+  if(store.ownerId===uid) return;
+
+  const nuncaReclamado = !store.ownerId;
+  const propias = nuncaReclamado ? (store.garments||[]).filter(g=>!ES_SEMILLA.has(g.id)) : [];
+
+  if(nuncaReclamado && propias.length){
+    // adopción: se conserva lo que el usuario metió, se tira la demo
+    store = {
+      ...store,
+      garments: propias,
+      ownerId: uid,
+      deletedIds: store.deletedIds||[]
+    };
+    save();
+    adoptadas = propias.length;   // syncFromCloud las subirá y avisará
+    return;
+  }
+
+  borrarRastroLocal();
+  store = tienda_vacia(uid);
+  save();
+}
+async function syncFromCloud(){
+  if(!session)return;
+  alignStoreToAccount();
+  await cloud.ensureProfile(); // garantizar FK antes de cualquier escritura
+  cloud.ensureSocialProfile().catch(e=>logError('ensureSocialProfile', e)); // encontrable en Comunidad desde el primer login
+  if(adoptadas){
+    toast(`${adoptadas} prenda${adoptadas>1?'s':''} de antes de registrarte ${adoptadas>1?'se han':'se ha'} añadido a tu cuenta`);
+    adoptadas=0;
+  }
+  let rows=await cloud.pullGarments();
+  // Si la nube no responde nos quedamos con lo local, que a estas alturas ya es
+  // lo correcto para esta cuenta. Antes el comentario decía "conservar lo local"
+  // pero align ya lo había vaciado y persistido, así que no conservaba nada.
+  if(rows===null){
+    logError('syncFromCloud.pull', 'la nube no respondió', {user:'No he podido traer tu armario de la nube. Vuelve a intentarlo cuando tengas conexión.'});
+    return;
+  }
+  // tombstones: prendas borradas en local no deben resucitar JAMÁS.
+  // El tombstone solo se limpia cuando la nube CONFIRMA el borrado.
+  const dead=new Set(store.deletedIds||[]);
+  if(dead.size){
+    for(const id of [...dead]){
+      const r=await cloud.deleteGarmentCloud(id).catch(()=>({ok:false}));
+      if(r&&r.ok){ dead.delete(id); }
+    }
+    store.deletedIds=[...dead]; save();
+    rows=rows.filter(r=>!dead.has(r.id)&&!(store.deletedIds||[]).includes(r.id));
+  }
+  // borrado suave: las filas marcadas deleted_at desaparecen en TODOS los dispositivos
+  const softDeleted=new Set(rows.filter(r=>r.deleted_at).map(r=>r.id));
+  rows=rows.filter(r=>!r.deleted_at);
+  // merge: subir cualquier prenda local que no esté ya en la nube
+  // (excepto las borradas en otro dispositivo: eso sería resucitarlas)
+  const cloudIds=new Set([...rows.map(r=>r.id),...softDeleted]);
+  const localOnly=store.garments.filter(g=>!cloudIds.has(g.id));
+  if(localOnly.length){
+    for(const g of localOnly) await cloud.pushGarment(g);
+    rows=await cloud.pullGarments();
+    if(rows===null) return;
+    rows=rows.filter(r=>!r.deleted_at&&!(store.deletedIds||[]).includes(r.id));
+  }
+  // Lo que baja de la nube pasa por la misma puerta que lo que se da de alta
+  // aquí. Antes se parcheaba a mano y forzaba `fit:'Regular Fit'` a todo, así
+  // que al sincronizar reaparecía un corte inventado en el calzado por mucho
+  // que se hubiera borrado en este dispositivo.
+  store.garments=rows.map(r=>canonPrenda(cloud.fromRow(r)));
+  // traer el perfil (sexo, edad, consentimientos, ADN guardado) — sin esto la
+  // personalización arranca a ciegas en cada sesión nueva.
+  const profileRow=await cloud.pullProfile();
+  if(profileRow){
+    store.profile={
+      ...store.profile,
+      name: profileRow.name ?? store.profile?.name,
+      age: profileRow.age ?? store.profile?.age,
+      sex: profileRow.sex ?? store.profile?.sex,
+      consent_data_b2b: profileRow.consent_data_b2b ?? store.profile?.consent_data_b2b,
+      consent_analytics: profileRow.consent_analytics ?? store.profile?.consent_analytics,
+      consent_marketing: profileRow.consent_marketing ?? store.profile?.consent_marketing,
+      measures: profileRow.measures ?? store.profile?.measures,
+      style_dna: profileRow.style_dna ?? store.profile?.style_dna,
+      drobe_score: profileRow.drobe_score ?? store.profile?.drobe_score
+    };
+  }
+  // traer maletas guardadas
+  const mals=await cloud.pullMaletas();
+  if(mals){
+    store.maletas=mals.map(m=>({id:m.id,name:m.name,dest:m.dest,days:m.days,plan:m.plan,items:m.items||[],looks:m.looks,weight:m.weight,createdAt:m.created_at}));
+  }
+  // traer tickets guardados
+  const tks=await cloud.pullTickets();
+  if(tks){
+    store.tickets=tks.map(t=>({id:t.id,store:t.store,dateISO:t.date,total:t.total,returnDays:t.return_days,warrantyMonths:t.warranty_months,img:t.img,garmentIds:t.garment_ids||[],items:t.items||[],createdAt:t.created_at}));
+  }
+  // traer wishlist
+  const wls=await cloud.pullWishlist();
+  if(wls){
+    store.wishlist=wls.map(w=>({id:w.id,desc:w.description,brand:w.brand,tipo:w.tipo,query:w.query,targetPrice:w.target_price,lastPrice:w.last_price,lastLink:w.last_link,lastSource:w.last_source,thumbnail:w.thumbnail,createdAt:w.created_at}));
+  }
+  save();
+  safeRender();
+}
