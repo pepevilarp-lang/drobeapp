@@ -32,6 +32,7 @@ module.exports = async function handler(req, res) {
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e) { body = {}; } }
   if (body && body.mode === 'tienda') { await tienda(body, key, res); return; }
+  if (body && body.mode === 'enlace') { await enlace(body, key, res); return; }
   const query = (body && body.query) || '';
   const brand = (body && body.brand) || '';
   const productType = (body && body.productType) || ''; // "pantalón lino azul marino"
@@ -78,35 +79,6 @@ module.exports = async function handler(req, res) {
       || p.product_link
       || ('https://www.google.com/search?tbm=shop&q=' + encodeURIComponent([p.source,p.title].filter(Boolean).join(' ') || p.title || ''));
   }
-  // 2ª llamada: resuelve el enlace directo del vendedor (va a la web de la tienda, sin 404)
-  async function directSellerLink(productId){
-    if(!productId) return null;
-    try{
-      const url = 'https://serpapi.com/search.json?engine=google_product&product_id=' + encodeURIComponent(productId) + '&gl=' + country + '&hl=es&api_key=' + key;
-      const ctrl = new AbortController();
-      const tm = setTimeout(() => ctrl.abort(), 12000);
-      const r = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(tm);
-      const d = await r.json();
-      const sellers = (d.sellers_results && d.sellers_results.online_sellers) || [];
-      if(!sellers.length) return null;
-      sellers.sort((a,b)=>(parsePrice(a.total_price||a.base_price)||1e9)-(parsePrice(b.total_price||b.base_price)||1e9));
-      const s = sellers.find(x=>x.link);
-      return s ? s.link : null;
-    }catch(e){ return null; }
-  }
-  // enriquece con enlace directo a tienda. Limita nº de 2ª llamadas para no quemar cuota.
-  async function enrichDirect(items, maxCalls){
-    let used = 0;
-    for(const it of items){
-      if(it._needsDirect && it._pid && used < maxCalls){
-        used++;
-        const dl = await directSellerLink(it._pid);
-        if(dl) it.link = dl;
-      }
-      delete it._needsDirect; delete it._pid;
-    }
-  }
   function mapItem(p) {
     const pv = typeof p.extracted_price === 'number' ? p.extracted_price : parsePrice(p.price);
     const direct = storeDirect(p);
@@ -119,6 +91,7 @@ module.exports = async function handler(req, res) {
       thumbnail: p.thumbnail || '',
       rating: p.rating || null,
       reviews: p.reviews || null,
+      token: p.immersive_product_page_token || '',
       _pid: p.product_id || null,
       _needsDirect: !direct  // si no hay link directo a tienda, intentaremos resolverlo
     };
@@ -275,13 +248,12 @@ module.exports = async function handler(req, res) {
     const altOut = alternatives.slice(0, 5);
     // presupuesto de llamadas. En segunda mano los enlaces de marketplace ya son
     // directos, así que no gastamos llamadas extra resolviéndolos.
-    if (channel === 'used') {
-      // sin enrichDirect
-    } else {
-      const brandSearches = Math.min(ownedBrands.length, 3);
-      await enrichDirect(exactOut, brandSearches >= 2 ? 2 : 3);
-      await enrichDirect(altOut, brandSearches >= 2 ? 1 : 2);
-    }
+    /* Antes aquí se gastaban hasta cinco búsquedas más en resolver el enlace
+       directo de cada resultado, con un motor (google_product) que ya no lo
+       devuelve: la cuota se iba y los enlaces seguían yendo a Google. Ahora el
+       enlace a la tienda se resuelve cuando el usuario TOCA una oferta (modo
+       `enlace`): una búsqueda solo si de verdad la quiere abrir. */
+    [...exactOut, ...altOut].forEach(it => { delete it._needsDirect; delete it._pid; });
 
     res.status(200).json({
       available: true,
@@ -347,6 +319,7 @@ function mapear(p) {
   return {
     title: p.title || '', price: p.price || (pv ? pv + ' €' : ''), price_value: pv,
     source: p.source || '', thumbnail: p.thumbnail || '',
+    token: p.immersive_product_page_token || '',
     link: directo || p.product_link || ('https://www.google.com/search?tbm=shop&q=' + encodeURIComponent(p.title || ''))
   };
 }
@@ -412,5 +385,34 @@ async function tienda(body, key, res) {
   out.ms = Date.now() - t0;
   if (errores.length) out.errores = [...new Set(errores)];
   res.status(200).json(out);
+}
+/* ═══ ENLACE A LA TIENDA ═══
+   Google Shopping ya no da el enlace de la tienda en los resultados: solo el de
+   su propia ficha, que en el móvil se abre mal (consentimiento, redirecciones,
+   a veces en blanco). El enlace de verdad está un paso más allá, en la ficha
+   «inmersiva» del producto, que lista las tiendas con su URL. Cuesta una
+   búsqueda, así que se pide solo cuando el usuario toca la oferta, y se elige la
+   misma tienda que estaba viendo en la tarjeta. */
+async function enlace(body, key, res) {
+  const token = String(body.token || '');
+  if (!token) { res.status(400).json({ ok: false, error: 'Falta el producto' }); return; }
+  const url = 'https://serpapi.com/search.json?engine=google_immersive_product&page_token=' + encodeURIComponent(token)
+    + '&gl=' + (body.country || 'es') + '&hl=es&api_key=' + key;
+  const ctrl = new AbortController();
+  const tm = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    const d = await r.json();
+    const stores = ((d && d.product_results && d.product_results.stores) || [])
+      .filter(s => s && s.link && !/google\.[^/]+\//i.test(s.link));
+    const quiero = sinAcentos(body.source || '');
+    const misma = quiero && stores.find(s => { const n = sinAcentos(s.name); return n && (n.includes(quiero) || quiero.includes(n)); });
+    const barata = stores.slice().sort((a, b) => (a.extracted_price || 1e9) - (b.extracted_price || 1e9))[0];
+    const elegida = misma || barata;
+    if (!elegida) { res.status(200).json({ ok: false, error: (d && d.error) || 'sin tiendas' }); return; }
+    res.status(200).json({ ok: true, link: elegida.link, store: elegida.name || '', price: elegida.price || '', misma: !!misma });
+  } catch (e) {
+    res.status(200).json({ ok: false, error: e.name === 'AbortError' ? 'timeout' : e.message });
+  } finally { clearTimeout(tm); }
 }
 module.exports._tienda = { filtro, sinAcentos, mapear };
