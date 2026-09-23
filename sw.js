@@ -1,6 +1,6 @@
 /* Sube este número en CADA despliegue que toque app.js, styles.css o lib/.
    Si no, iOS puede seguir sirviendo la versión anterior desde la caché. */
-const CACHE = 'drobe-v73';
+const CACHE = 'drobe-v74';
 const SHELL = [
   './','./index.html','./styles.css','./app.js','./wardrobe3d.js',
   './lib/supabase.js','./lib/log.js','./lib/taste.js','./lib/normalize.js','./lib/modelos.js','./manifest.webmanifest',
